@@ -2,10 +2,11 @@ import React, { useEffect, useState } from "react";
 import { Box, Text, useInput } from "ink";
 import { eventBus, type WaStatus } from "../events.js";
 import { renderQrToString } from "../qr.js";
-import { colors, icons, waStatusColor, waStatusLabel } from "../theme.js";
+import { colors, icons, shellGeometry, waStatusColor, waStatusLabel } from "../theme.js";
 import { scaledInterval } from "../terminal-env.js";
 import { reconnectFresh } from "../../whatsapp/client.js";
 import { registerMessageHandlers } from "../../whatsapp/handlers.js";
+import { useClickRegions } from "../clickRegions.js";
 
 // Rows of chrome that are NOT the QR block itself, on this screen, given
 // the current JSX below: title, status line (+ its marginTop), the margin
@@ -43,7 +44,13 @@ function Spinner({ color }: { color: string }): React.ReactElement {
   return <Text color={color}>{icons.spinner[frame]}</Text>;
 }
 
-export function Pairing({ active = true }: { active?: boolean } = {}): React.ReactElement {
+export function Pairing({
+  active = true,
+  onActivate,
+}: {
+  active?: boolean;
+  onActivate?: () => void;
+} = {}): React.ReactElement {
   const [status, setStatus] = useState<WaStatus>("idle");
   const [qrString, setQrString] = useState<string | undefined>(undefined);
   const [detail, setDetail] = useState<string | undefined>(undefined);
@@ -130,6 +137,34 @@ export function Pairing({ active = true }: { active?: boolean } = {}): React.Rea
       void handleRefresh();
     }
   });
+
+  // Click region: the "press r to regenerate" action is only offered from
+  // specific stages (scan/stalled), and its exact row shifts with the QR
+  // block's variable height (0-N lines depending on qrString) and the
+  // stage-dependent panel content -- rather than replicate that per-stage
+  // row math (this screen already computes availableQrRows/qrLineCount
+  // dynamically off process.stdout.rows, which would need duplicating
+  // here), the whole bordered panel below the status line is registered as
+  // one clickable target for the regenerate action when it's actually
+  // available. Coarser than a tight per-line hit box, but correct, and
+  // there's nothing else clickable in this panel to conflict with.
+  useClickRegions(
+    canRefresh && !refreshing
+      ? [
+          {
+            rowStart: shellGeometry.screenTopRow + 3,
+            rowEnd: (process.stdout.rows ?? 32) - 5,
+            colStart: shellGeometry.screenLeftCol,
+            colEnd: 9999,
+            onClick: () => {
+              onActivate?.();
+              void handleRefresh();
+            },
+          },
+        ]
+      : [],
+    true
+  );
 
   return (
     <Box flexDirection="column">

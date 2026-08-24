@@ -3,8 +3,9 @@ import { Box, Text, useInput } from "ink";
 import { getPrisma } from "../../db/prisma.js";
 import { EditorPane } from "../EditorPane.js";
 import { TextInput } from "../TextInput.js";
-import { colors } from "../theme.js";
+import { colors, shellGeometry } from "../theme.js";
 import { scaledInterval } from "../terminal-env.js";
+import { useClickRegions } from "../clickRegions.js";
 
 const ESCALATION_PHONE_POLL_MS = 4000;
 
@@ -22,7 +23,15 @@ const DEFAULT_PROMPT =
  * (see src/agent/tools/handoff.ts). It lives here rather than a dedicated
  * screen since it's a single AgentConfig field, same as masterSystemPrompt.
  */
-export function SystemPrompt({ active }: { active: boolean }): React.ReactElement {
+const EDITOR_HEIGHT = 16;
+
+export function SystemPrompt({
+  active,
+  onActivate,
+}: {
+  active: boolean;
+  onActivate?: () => void;
+}): React.ReactElement {
   const [content, setContent] = useState("");
   const [savedContent, setSavedContent] = useState("");
   const [escalationPhone, setEscalationPhone] = useState("");
@@ -86,6 +95,42 @@ export function SystemPrompt({ active }: { active: boolean }): React.ReactElemen
     { isActive: active }
   );
 
+  // Click regions ----------------------------------------------------------
+  //
+  // Two clickable targets, each just moving `focus` (and the app's
+  // nav->screen focus via onActivate) the same way Tab already does: the
+  // editor block, and the escalation-phone field below it. Row math mirrors
+  // EditorPane's render structure (title, subtitle, marginTop blank, then a
+  // bordered box of `height` content rows) followed by this screen's own
+  // phone-field Box.
+  const editorBottomRow = shellGeometry.screenTopRow + 2 /* subtitle + blank */ + 1 /* border top */ + EDITOR_HEIGHT;
+  const phoneFieldRow = editorBottomRow + 3; // blank + border top + this content row
+  useClickRegions(
+    [
+      {
+        rowStart: shellGeometry.screenTopRow,
+        rowEnd: editorBottomRow,
+        colStart: shellGeometry.screenLeftCol,
+        colEnd: 9999,
+        onClick: () => {
+          onActivate?.();
+          setFocus("editor");
+        },
+      },
+      {
+        rowStart: phoneFieldRow,
+        rowEnd: phoneFieldRow,
+        colStart: shellGeometry.screenLeftCol,
+        colEnd: 9999,
+        onClick: () => {
+          onActivate?.();
+          setFocus("phone");
+        },
+      },
+    ],
+    true
+  );
+
   async function save() {
     const prisma = getPrisma();
     await prisma.agentConfig.upsert({
@@ -108,7 +153,7 @@ export function SystemPrompt({ active }: { active: boolean }): React.ReactElemen
         value={content}
         onChange={setContent}
         active={active && focus === "editor"}
-        height={16}
+        height={EDITOR_HEIGHT}
         dirty={content !== savedContent}
         status={status}
       />

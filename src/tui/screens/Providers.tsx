@@ -8,8 +8,9 @@ import {
   type OllamaPullProgress,
 } from "../../providers/ollama-pull.js";
 import { TextInput } from "../TextInput.js";
-import { colors, icons } from "../theme.js";
+import { colors, icons, shellGeometry } from "../theme.js";
 import { scaledInterval } from "../terminal-env.js";
+import { labelRegion, listRowRegions, useClickRegions, type ClickRegion } from "../clickRegions.js";
 
 const PROVIDERS_POLL_MS = 4000;
 const DEFAULT_OLLAMA_BASE_URL = "http://localhost:11434";
@@ -61,7 +62,13 @@ interface ProviderRow {
 const PROVIDER_NAMES = ["ollama", "openai", "anthropic", "openai-compatible"] as const;
 const FIELDS = ["name", "apiKey", "baseUrl", "model", "embeddingModel"] as const;
 
-export function Providers({ active }: { active: boolean }): React.ReactElement {
+export function Providers({
+  active,
+  onActivate,
+}: {
+  active: boolean;
+  onActivate?: () => void;
+}): React.ReactElement {
   const [providers, setProviders] = useState<ProviderRow[]>([]);
   const [selected, setSelected] = useState(0);
   const [mode, setMode] = useState<"list" | "form" | "embed-picker">("list");
@@ -108,6 +115,31 @@ export function Providers({ active }: { active: boolean }): React.ReactElement {
     return () => clearInterval(interval);
   }, []);
 
+  // Shared handlers -- called identically from the keyboard (useInput below)
+  // and from click regions (useClickRegions further down), one code path
+  // per action.
+  function startNewProvider() {
+    setForm({ nameIdx: 0, apiKey: "", baseUrl: "", model: "", embeddingModel: "" });
+    setFieldIndex(0);
+    setMode("form");
+  }
+  function activateSelected() {
+    if (providers[selected]) void activate(providers[selected].id);
+  }
+  function deleteSelected() {
+    if (providers[selected]) void remove(providers[selected].id);
+  }
+  function testSelected() {
+    if (providers[selected]) void test(providers[selected]);
+  }
+  function openEmbedPicker() {
+    if (providers[selected]?.name !== "ollama") return;
+    setEmbedPickerIndex(0);
+    setPullProgress(undefined);
+    setPullError(undefined);
+    setMode("embed-picker");
+  }
+
   useInput(
     (input, key) => {
       if (!active) return;
@@ -153,24 +185,92 @@ export function Providers({ active }: { active: boolean }): React.ReactElement {
       // list mode
       if (key.upArrow) setSelected((i) => Math.max(0, i - 1));
       else if (key.downArrow) setSelected((i) => Math.min(providers.length - 1, i + 1));
-      else if (input === "n") {
-        setForm({ nameIdx: 0, apiKey: "", baseUrl: "", model: "", embeddingModel: "" });
-        setFieldIndex(0);
-        setMode("form");
-      } else if (input === "a" && providers[selected]) {
-        void activate(providers[selected].id);
-      } else if (input === "d" && providers[selected]) {
-        void remove(providers[selected].id);
-      } else if (input === "t" && providers[selected]) {
-        void test(providers[selected]);
-      } else if (input === "e" && providers[selected]?.name === "ollama") {
-        setEmbedPickerIndex(0);
-        setPullProgress(undefined);
-        setPullError(undefined);
-        setMode("embed-picker");
-      }
+      else if (input === "n") startNewProvider();
+      else if (input === "a") activateSelected();
+      else if (input === "d") deleteSelected();
+      else if (input === "t") testSelected();
+      else if (input === "e") openEmbedPicker();
     },
     { isActive: active }
+  );
+
+  // Click regions ------------------------------------------------------
+  //
+  // Row math mirrors the JSX below: each mode's own render structure,
+  // recomputed fresh every render since provider count/mode/selection can
+  // all change under it (this is the "N boxes with a gap between them"
+  // shape -- height 4 rows/box, 1 blank row of Box `gap` between each).
+  const providersClickRegions: ClickRegion[] = [];
+  const embedClickRegions: ClickRegion[] = [];
+  const formClickRegions: ClickRegion[] = [];
+
+  if (mode === "list") {
+    const firstBoxTop = shellGeometry.screenTopRow + 1;
+    for (let i = 0; i < providers.length; i++) {
+      const boxTop = firstBoxTop + i * 5; // 4 rows/box + 1 gap row
+      providersClickRegions.push({
+        rowStart: boxTop,
+        rowEnd: boxTop + 3,
+        colStart: shellGeometry.screenLeftCol,
+        colEnd: 9999,
+        onClick: () => {
+          setSelected(i);
+          onActivate?.();
+        },
+      });
+    }
+    const listHeight = providers.length > 0 ? providers.length * 5 - 1 : 1;
+    const rowAfterList = firstBoxTop + listHeight;
+    const extraLines = testing || testResult ? 2 : 0;
+    const footerRow = rowAfterList + extraLines + 1;
+    const footerLine = `[n] New · [a] Activate · [d] Delete · [t] Test${
+      providers[selected]?.name === "ollama" ? " · [e] Pull Embedding Model" : ""
+    }`;
+    const buttons: [string, () => void][] = [
+      ["[n] New", () => { onActivate?.(); startNewProvider(); }],
+      ["[a] Activate", () => { onActivate?.(); activateSelected(); }],
+      ["[d] Delete", () => { onActivate?.(); deleteSelected(); }],
+      ["[t] Test", () => { onActivate?.(); testSelected(); }],
+      ["[e] Pull Embedding Model", () => { onActivate?.(); openEmbedPicker(); }],
+    ];
+    for (const [label, onClick] of buttons) {
+      const region = labelRegion(footerLine, footerRow, shellGeometry.screenLeftCol, label, onClick);
+      if (region) providersClickRegions.push(region);
+    }
+  } else if (mode === "embed-picker") {
+    const modelsStartRow = shellGeometry.screenTopRow + 3;
+    if (!pulling) {
+      for (let i = 0; i < KNOWN_OLLAMA_EMBEDDING_MODELS.length; i++) {
+        const boxTop = modelsStartRow + i * 3; // 2 lines/model + 1 gap row
+        embedClickRegions.push({
+          rowStart: boxTop,
+          rowEnd: boxTop + 1,
+          colStart: shellGeometry.screenLeftCol,
+          colEnd: 9999,
+          onClick: () => setEmbedPickerIndex(i),
+        });
+      }
+    }
+  } else if (mode === "form") {
+    const fieldsStartRow = shellGeometry.screenTopRow + 1;
+    for (let i = 0; i < FIELDS.length; i++) {
+      const row = fieldsStartRow + i;
+      formClickRegions.push({
+        rowStart: row,
+        rowEnd: row,
+        colStart: shellGeometry.screenLeftCol,
+        colEnd: 9999,
+        onClick: () => {
+          onActivate?.();
+          setFieldIndex(i);
+        },
+      });
+    }
+  }
+
+  useClickRegions(
+    mode === "list" ? providersClickRegions : mode === "embed-picker" ? embedClickRegions : formClickRegions,
+    active
   );
 
   async function pullAndSetEmbedding(modelName: string): Promise<void> {
@@ -402,8 +502,16 @@ export function Providers({ active }: { active: boolean }): React.ReactElement {
       )}
       <Box marginTop={1}>
         <Text dimColor>
-          n new · a activate · d delete · t test connection
-          {providers[selected]?.name === "ollama" ? " · e pull embedding model" : ""}
+          <Text color={colors.accent}>[n] New</Text> · <Text color={colors.accent}>[a] Activate</Text> ·{" "}
+          <Text color={colors.accent}>[d] Delete</Text> · <Text color={colors.accent}>[t] Test</Text>
+          {providers[selected]?.name === "ollama" ? (
+            <>
+              {" "}
+              · <Text color={colors.accent}>[e] Pull Embedding Model</Text>
+            </>
+          ) : (
+            ""
+          )}
         </Text>
       </Box>
     </Box>

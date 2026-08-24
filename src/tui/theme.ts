@@ -84,6 +84,26 @@ export const layout = {
   navWidth: 26,
 } as const;
 
+/**
+ * Absolute terminal row/col math for mouse click hit-testing, mirroring the
+ * exact chrome App.tsx renders around every screen: the top status bar, and
+ * the screen pane's own border + padding. Any screen registering click
+ * regions for its own rendered lines (see clickRegions.ts's useClickRegions)
+ * starts counting from these two constants, then adds its own render-order
+ * offsets on top -- the same technique App.tsx's nav column already used
+ * (computeNavRowMap) before mouse support generalized past nav-only, now
+ * shared here so screens can reuse it without importing App.tsx (which
+ * would be a circular import, since App.tsx imports every screen).
+ */
+export const shellGeometry = {
+  /** Status bar box: border top + 1 content row + border bottom. */
+  statusBarRows: 3,
+  /** First absolute row of an active screen's own rendered content (after the status bar, the screen pane's top border, and its 1-row paddingY). */
+  screenTopRow: 6,
+  /** First absolute column of an active screen's own rendered content (after the nav column's width, the screen pane's left border, and its 2-col paddingX). */
+  screenLeftCol: 30,
+} as const;
+
 /** Small block-character sparkline built from an array of non-negative counts. */
 const SPARK_BLOCKS = ["▁", "▂", "▃", "▄", "▅", "▆", "▇", "█"];
 export function sparkline(values: number[]): string {

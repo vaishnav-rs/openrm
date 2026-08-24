@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { Box, Text, useInput } from "ink";
 import { colors } from "./theme.js";
+import { useTextCapture } from "./mouse.js";
 
 interface TextAreaProps {
   value: string;
@@ -211,6 +212,10 @@ export function TextArea({
   }, [cursorLine, lineStarts.length, height, scrollTopProp]);
 
   const scrollTop = scrollTopProp !== undefined ? scrollTopProp : internalScrollTop;
+
+  // See src/tui/mouse.ts for why this is required: SGR mouse mode must stay
+  // disabled for as long as this field is actively capturing keystrokes.
+  useTextCapture(active);
 
   useInput(
     (input, key) => {

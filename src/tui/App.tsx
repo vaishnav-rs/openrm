@@ -10,9 +10,11 @@ import { SystemPrompt } from "./screens/SystemPrompt.js";
 import { RagDocuments } from "./screens/RagDocuments.js";
 import { McpServers } from "./screens/McpServers.js";
 import { eventBus, type WaStatus } from "./events.js";
-import { colors, hyperlink, icons, layout, waStatusColor, waStatusLabel } from "./theme.js";
+import { colors, hyperlink, icons, layout, shellGeometry, waStatusColor, waStatusLabel } from "./theme.js";
 import { getPrisma } from "../db/prisma.js";
 import { scaledInterval } from "./terminal-env.js";
+import { textCaptureRegistry } from "./mouse.js";
+import { clickRegistry, useClickRegions, type ClickRegion } from "./clickRegions.js";
 
 interface NavItem {
   key: string;
@@ -60,26 +62,34 @@ type ScreenKey = string;
 const HAB8_URL = "https://hab8.in";
 const HAB8_LABEL = "Built by Hab8 Technologies";
 
-// --- Mouse support (nav column only) ---------------------------------
+// --- Mouse support (whole app) -----------------------------------------
 //
 // SGR extended mouse mode: enabling it makes the terminal emit
 // `ESC [ < Cb ; Cx ; Cy M` on button press and `...m` on release, with
-// 1-based Cx/Cy terminal columns/rows. We only ever enable this while the
-// left nav column has focus, and explicitly disable it the instant focus
-// moves to the screen pane (see the effect below), on unmount, and on
-// process exit -- so raw mouse bytes can never leak into a TextInput /
-// TextArea field on another screen.
+// 1-based Cx/Cy terminal columns/rows. This used to be gated to only ever
+// run while the left nav column had focus, out of caution that raw mouse
+// bytes might leak into a TextInput/TextArea on another screen -- that
+// caution was directionally right but never actually verified. It has now
+// been verified (see src/tui/mouse.ts's doc comment for the full evidence
+// trail through Ink's own source): Ink DOES deliver unrecognized escape
+// sequences as literal text to whatever useInput consumer is active, and
+// TextInput/TextArea WOULD insert that text into whatever's being typed.
+// So the real safety boundary isn't "focus === nav", it's "is any
+// TextInput/TextArea currently capturing keystrokes anywhere in the app" --
+// textCaptureRegistry (src/tui/mouse.ts) tracks exactly that, globally, and
+// is what the effects below gate on instead. Every other click surface
+// (nav, every list screen, every hint-bar button) is safe to leave mouse
+// mode on for, all the time.
 export const MOUSE_ENABLE_SEQUENCE = "\x1b[?1000h\x1b[?1006h";
 export const MOUSE_DISABLE_SEQUENCE = "\x1b[?1000l\x1b[?1006l";
 
 const SGR_MOUSE_PATTERN = /\x1b\[<(\d+);(\d+);(\d+)([Mm])/;
 
-// Fixed row geometry of the chrome above the nav content:
-//   - status bar Box (borderStyle="round", single content row): 3 rows
-//   - nav Box's own top border: 1 row
-// so the first line of nav content (the first group's title) lands on
-// row STATUS_BAR_ROWS + NAV_TOP_BORDER_ROWS + 1.
-const STATUS_BAR_ROWS = 3;
+// Fixed row geometry of the chrome above the nav content: status bar rows
+// (shellGeometry.statusBarRows, shared with every screen's own click-region
+// math in theme.ts) plus the nav Box's own top border (1 row), so the first
+// line of nav content (the first group's title) lands on row
+// statusBarRows + NAV_TOP_BORDER_ROWS + 1.
 const NAV_TOP_BORDER_ROWS = 1;
 
 /**
@@ -90,7 +100,7 @@ const NAV_TOP_BORDER_ROWS = 1;
  */
 function computeNavRowMap(): Map<string, number> {
   const map = new Map<string, number>();
-  let row = STATUS_BAR_ROWS + NAV_TOP_BORDER_ROWS + 1;
+  let row = shellGeometry.statusBarRows + NAV_TOP_BORDER_ROWS + 1;
   for (const group of NAV_GROUPS) {
     row += 1; // group title line
     for (const item of group.items) {
@@ -231,28 +241,45 @@ export function App(): React.ReactElement {
     }
   });
 
-  // Enable SGR mouse click reporting only while the nav column has focus,
-  // and explicitly disable it the instant focus leaves nav (dep change) or
-  // this component unmounts (cleanup). This is what structurally prevents
-  // raw mouse bytes from ever reaching a TextInput/TextArea on another
-  // screen -- mouse mode is simply never on while focus === "screen".
+  // Subscribe to the global text-capture registry (src/tui/mouse.ts) so
+  // this component re-renders -- and the effects below re-run -- the
+  // instant any TextInput/TextArea anywhere in the app starts or stops
+  // actively capturing keystrokes.
+  const [textCaptureActive, setTextCaptureActive] = useState(textCaptureRegistry.active);
   useEffect(() => {
-    if (focus !== "nav") return;
+    const onChange = (isActive: boolean) => setTextCaptureActive(isActive);
+    textCaptureRegistry.on("change", onChange);
+    return () => {
+      textCaptureRegistry.off("change", onChange);
+    };
+  }, []);
+
+  // Enable SGR mouse click reporting whenever no text field is actively
+  // capturing keystrokes anywhere in the app (see the big comment above
+  // MOUSE_ENABLE_SEQUENCE and src/tui/mouse.ts for why this, rather than
+  // nav-only focus, is the actual safety boundary), and explicitly disable
+  // it the instant that stops being true (dep change), on unmount, and on
+  // process exit.
+  useEffect(() => {
+    if (textCaptureActive) return;
     process.stdout.write(MOUSE_ENABLE_SEQUENCE);
     return () => {
       process.stdout.write(MOUSE_DISABLE_SEQUENCE);
     };
-  }, [focus]);
+  }, [textCaptureActive]);
 
-  // Parse SGR mouse press sequences directly off stdin. This listener is
-  // additive -- Ink's own useInput/useStdin machinery consumes a separate
-  // internal "input" event derived from parse-keypress, which does not
-  // recognize `ESC [ < ... M` sequences, so they pass through inertly to
-  // any other "data" listener (verified by reading Ink's use-input.js /
-  // StdinContext.js source: it listens on stdin via its own internal
-  // EventEmitter, not by exclusively consuming raw "data" events).
+  // Parse SGR mouse press sequences directly off stdin and dispatch them
+  // through the shared click registry (src/tui/clickRegions.ts), which
+  // every clickable surface in the app -- nav, list rows, hint-bar buttons
+  // -- registers into during its own render. This listener is additive --
+  // Ink's own useInput/useStdin machinery consumes a separate internal
+  // "input" event derived from parse-keypress; it does deliver these same
+  // raw bytes to any *active* useInput consumer too (see mouse.ts), but
+  // since mouse mode is only ever enabled while no TextInput/TextArea is
+  // active, there's nothing listening that would misinterpret them as
+  // typed text.
   useEffect(() => {
-    if (focus !== "nav") return;
+    if (textCaptureActive) return;
     const onData = (chunk: Buffer | string) => {
       const str = typeof chunk === "string" ? chunk : chunk.toString("utf8");
       const match = SGR_MOUSE_PATTERN.exec(str);
@@ -263,22 +290,37 @@ export function App(): React.ReactElement {
       if (button !== 0) return; // left click only
       const x = Number(xRaw);
       const y = Number(yRaw);
-      if (x < 1 || x > layout.navWidth) return; // outside nav column
-      for (const [key, row] of NAV_ROW_MAP) {
-        if (row !== y) continue;
-        const idx = FLAT_ITEMS.findIndex((item) => item.key === key);
-        if (idx >= 0) {
-          setSelectedIndex(idx);
-          setFocus("screen");
-        }
-        return;
-      }
+      clickRegistry.dispatch(x, y);
     };
     process.stdin.on("data", onData);
     return () => {
       process.stdin.removeListener("data", onData);
     };
-  }, [focus]);
+  }, [textCaptureActive]);
+
+  // Nav column click regions: static (NAV_GROUPS never changes at runtime),
+  // so this array only needs to be built once. Clicking a nav item selects
+  // it and moves focus into the screen pane, matching ↵/→ on that item.
+  const navClickRegions = useMemo<ClickRegion[]>(() => {
+    const regions: ClickRegion[] = [];
+    for (const [key, row] of NAV_ROW_MAP) {
+      regions.push({
+        rowStart: row,
+        rowEnd: row,
+        colStart: 1,
+        colEnd: layout.navWidth,
+        onClick: () => {
+          const idx = FLAT_ITEMS.findIndex((item) => item.key === key);
+          if (idx >= 0) {
+            setSelectedIndex(idx);
+            setFocus("screen");
+          }
+        },
+      });
+    }
+    return regions;
+  }, []);
+  useClickRegions(navClickRegions, true);
 
   // Belt-and-suspenders: also disable mouse mode on raw process exit (e.g.
   // an uncaught exception unwinding without React ever unmounting). SIGINT
@@ -382,7 +424,7 @@ export function App(): React.ReactElement {
           paddingY={1}
           overflow="hidden"
         >
-          <ActiveScreen screen={active} active={focus === "screen"} />
+          <ActiveScreen screen={active} active={focus === "screen"} onActivate={() => setFocus("screen")} />
         </Box>
       </Box>
 
@@ -390,8 +432,8 @@ export function App(): React.ReactElement {
       <Box paddingX={1} justifyContent="space-between" flexShrink={0}>
         <Text color={colors.mutedDim}>
           {focus === "nav"
-            ? `${icons.caretUp}${icons.caretDown} navigate  ↵/→ open pane · click to open`
-            : "esc/q/← back to nav  (see pane for keys)"}
+            ? `${icons.caretUp}${icons.caretDown} navigate  ↵/→ open pane · click anywhere`
+            : "esc/q/← back to nav  (see pane for keys) · click anywhere"}
         </Text>
         <Text color={colors.mutedDim}>
           openrm never initiates WhatsApp messages -- reactive only
@@ -400,12 +442,11 @@ export function App(): React.ReactElement {
 
       {/*
         Persistent branding footer. Uses an OSC 8 terminal hyperlink (see
-        theme.ts's hyperlink()) rather than our own mouse-click handling --
-        that keeps this fully independent of the nav-only SGR mouse mode
-        above (which is deliberately disabled outside the nav column to
-        protect text-editing screens), and lets the terminal itself handle
-        the click, with graceful degradation to plain text where OSC 8
-        isn't supported.
+        theme.ts's hyperlink()) rather than our own click-region handling --
+        that keeps this fully independent of the SGR mouse mode above (which
+        is disabled while any text field is capturing keystrokes -- see
+        src/tui/mouse.ts), and lets the terminal itself handle the click,
+        with graceful degradation to plain text where OSC 8 isn't supported.
       */}
       <Box paddingX={1} justifyContent="center" flexShrink={0}>
         <Text color={colors.accent} underline>
@@ -419,29 +460,32 @@ export function App(): React.ReactElement {
 function ActiveScreen({
   screen,
   active,
+  onActivate,
 }: {
   screen: ScreenKey;
   active: boolean;
+  /** Called by a screen's own click handlers when a click lands in its pane while nav still has keyboard focus, so clicking a row/button also moves focus into the screen -- matching what pressing ↵/→ on nav already does. */
+  onActivate: () => void;
 }): React.ReactElement {
   switch (screen) {
     case "dashboard":
       return <Dashboard />;
     case "pairing":
-      return <Pairing active={active} />;
+      return <Pairing active={active} onActivate={onActivate} />;
     case "conversations":
-      return <ConversationsFeed active={active} />;
+      return <ConversationsFeed active={active} onActivate={onActivate} />;
     case "contacts":
-      return <Contacts active={active} />;
+      return <Contacts active={active} onActivate={onActivate} />;
     case "providers":
-      return <Providers active={active} />;
+      return <Providers active={active} onActivate={onActivate} />;
     case "soul":
-      return <Soul active={active} />;
+      return <Soul active={active} onActivate={onActivate} />;
     case "system-prompt":
-      return <SystemPrompt active={active} />;
+      return <SystemPrompt active={active} onActivate={onActivate} />;
     case "rag":
-      return <RagDocuments active={active} />;
+      return <RagDocuments active={active} onActivate={onActivate} />;
     case "mcp":
-      return <McpServers active={active} />;
+      return <McpServers active={active} onActivate={onActivate} />;
     default:
       return <Text>Unknown screen</Text>;
   }

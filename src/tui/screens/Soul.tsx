@@ -6,6 +6,8 @@ import { fileURLToPath } from "node:url";
 import { join } from "node:path";
 import { getSoulPath, getOpenrmHome } from "../../setup/paths.js";
 import { EditorPane } from "../EditorPane.js";
+import { shellGeometry } from "../theme.js";
+import { useClickRegions } from "../clickRegions.js";
 
 function loadDefaultSoul(): string {
   const here = dirname(fileURLToPath(import.meta.url));
@@ -24,7 +26,15 @@ function loadDefaultSoul(): string {
  * loaded fresh from disk on every inbound message by the orchestrator, so
  * saving here takes effect on the very next reply.
  */
-export function Soul({ active }: { active: boolean }): React.ReactElement {
+const EDITOR_HEIGHT = 16;
+
+export function Soul({
+  active,
+  onActivate,
+}: {
+  active: boolean;
+  onActivate?: () => void;
+}): React.ReactElement {
   const [content, setContent] = useState("");
   const [savedContent, setSavedContent] = useState("");
   const [status, setStatus] = useState<string | undefined>(undefined);
@@ -50,6 +60,27 @@ export function Soul({ active }: { active: boolean }): React.ReactElement {
     { isActive: active }
   );
 
+  // Click region: the whole editor block (title through the textarea's
+  // bordered box) is a single clickable target that just focuses this
+  // screen -- there's no sub-mode to switch here (the editor is the only
+  // thing on this screen, so it's already the active TextArea whenever the
+  // screen itself has focus). Row math mirrors EditorPane's own render
+  // structure: title, subtitle, a marginTop blank row, then the bordered
+  // box (border + `height` content rows + border).
+  const editorBottomRow = shellGeometry.screenTopRow + 2 /* subtitle + blank */ + 1 /* border top */ + EDITOR_HEIGHT;
+  useClickRegions(
+    [
+      {
+        rowStart: shellGeometry.screenTopRow,
+        rowEnd: editorBottomRow,
+        colStart: shellGeometry.screenLeftCol,
+        colEnd: 9999,
+        onClick: () => onActivate?.(),
+      },
+    ],
+    true
+  );
+
   return (
     <Box flexDirection="column">
       <EditorPane
@@ -58,7 +89,7 @@ export function Soul({ active }: { active: boolean }): React.ReactElement {
         value={content}
         onChange={setContent}
         active={active}
-        height={16}
+        height={EDITOR_HEIGHT}
         dirty={content !== savedContent}
         status={status}
       />

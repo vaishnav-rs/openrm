@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { Text, useInput } from "ink";
 import { colors } from "./theme.js";
+import { useTextCapture } from "./mouse.js";
 
 interface TextInputProps {
   value: string;
@@ -38,6 +39,10 @@ export function TextInput({
   useEffect(() => {
     setCursor((c) => Math.min(c, value.length));
   }, [value.length]);
+
+  // See src/tui/mouse.ts for why this is required: SGR mouse mode must stay
+  // disabled for as long as this field is actively capturing keystrokes.
+  useTextCapture(active);
 
   useInput(
     (input, key) => {

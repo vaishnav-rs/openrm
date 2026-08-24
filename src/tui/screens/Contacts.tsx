@@ -1,9 +1,10 @@
 import React, { useEffect, useState } from "react";
 import { Box, Text, useInput } from "ink";
 import { getPrisma } from "../../db/prisma.js";
-import { colors, icons, padCol } from "../theme.js";
+import { colors, icons, padCol, shellGeometry } from "../theme.js";
 import { scaledInterval } from "../terminal-env.js";
 import { formatPhone } from "../phone.js";
+import { labelRegion, listRowRegions, useClickRegions, type ClickRegion } from "../clickRegions.js";
 
 const CONTACTS_POLL_MS = 4000;
 
@@ -21,7 +22,13 @@ interface ConversationDetail {
 
 const COL = { name: 20, phone: 20, interests: 10, lastSeen: 16 };
 
-export function Contacts({ active }: { active: boolean }): React.ReactElement {
+export function Contacts({
+  active,
+  onActivate,
+}: {
+  active: boolean;
+  onActivate?: () => void;
+}): React.ReactElement {
   const [contacts, setContacts] = useState<ContactRow[]>([]);
   const [selected, setSelected] = useState(0);
   const [drilledIn, setDrilledIn] = useState(false);
@@ -65,6 +72,35 @@ export function Contacts({ active }: { active: boolean }): React.ReactElement {
     return () => clearInterval(interval);
   }, []);
 
+  // Shared handlers -- called identically from the keyboard (useInput below)
+  // and from click regions (useClickRegions further down), so there is one
+  // code path per action rather than duplicated keyboard/mouse logic.
+  function requestDelete() {
+    if (contacts[selected]) setMode("confirm-delete");
+  }
+
+  function confirmDelete() {
+    if (!contacts[selected]) return;
+    void (async () => {
+      const prisma = getPrisma();
+      await prisma.contact.delete({ where: { id: contacts[selected].id } });
+      setMode("list");
+      await refresh();
+    })();
+  }
+
+  function cancelDelete() {
+    setMode("list");
+  }
+
+  function openDetails() {
+    if (!contacts[selected]) return;
+    void loadDetail(contacts[selected].id).then((d) => {
+      setDetail(d);
+      setDrilledIn(true);
+    });
+  }
+
   useInput(
     (input, key) => {
       if (!active) return;
@@ -73,31 +109,61 @@ export function Contacts({ active }: { active: boolean }): React.ReactElement {
         return;
       }
       if (mode === "confirm-delete") {
-        if (input === "y" && contacts[selected]) {
-          void (async () => {
-            const prisma = getPrisma();
-            await prisma.contact.delete({ where: { id: contacts[selected].id } });
-            setMode("list");
-            await refresh();
-          })();
-        } else {
-          setMode("list");
-        }
+        if (input === "y") confirmDelete();
+        else cancelDelete();
         return;
       }
       if (key.upArrow) setSelected((i) => Math.max(0, i - 1));
       else if (key.downArrow) setSelected((i) => Math.min(contacts.length - 1, i + 1));
       else if (key.return && contacts[selected]) {
-        void loadDetail(contacts[selected].id).then((d) => {
-          setDetail(d);
-          setDrilledIn(true);
-        });
+        openDetails();
       } else if (input === "d" && contacts[selected]) {
-        setMode("confirm-delete");
+        requestDelete();
       }
     },
     { isActive: active }
   );
+
+  // Click regions ----------------------------------------------------------
+  //
+  // Row math mirrors the JSX below exactly, the same technique App.tsx's
+  // nav column established (computeNavRowMap): title (screenTopRow), a
+  // marginTop blank row, the column-header row, then one row per contact.
+  const listStartRow = shellGeometry.screenTopRow + 3;
+  const rowAfterList = listStartRow + contacts.length;
+  const confirmContentRow = rowAfterList + 1; // marginTop blank + this row
+  const footerContentRow = (mode === "confirm-delete" ? confirmContentRow + 2 : rowAfterList + 1);
+
+  const confirmName = contacts[selected]?.name ?? contacts[selected]?.phone ?? "";
+  const confirmLine = `Delete "${confirmName}" and all their interests/conversations? [y] Confirm  [esc] Cancel`;
+  const footerLine = "↑/↓ select · ↵ view details · [d] Delete";
+
+  const clickRegions: ClickRegion[] = [];
+  if (mode === "list" && !drilledIn) {
+    clickRegions.push(
+      ...listRowRegions(listStartRow, shellGeometry.screenLeftCol, contacts.length, (i) => {
+        setSelected(i);
+        onActivate?.();
+      })
+    );
+    const del = labelRegion(footerLine, footerContentRow, shellGeometry.screenLeftCol, "[d] Delete", () => {
+      onActivate?.();
+      requestDelete();
+    });
+    if (del) clickRegions.push(del);
+  } else if (mode === "confirm-delete") {
+    const yes = labelRegion(confirmLine, confirmContentRow, shellGeometry.screenLeftCol, "[y] Confirm", () => {
+      onActivate?.();
+      confirmDelete();
+    });
+    const no = labelRegion(confirmLine, confirmContentRow, shellGeometry.screenLeftCol, "[esc] Cancel", () => {
+      onActivate?.();
+      cancelDelete();
+    });
+    if (yes) clickRegions.push(yes);
+    if (no) clickRegions.push(no);
+  }
+  useClickRegions(clickRegions, active);
 
   async function loadDetail(contactId: string): Promise<ConversationDetail> {
     const prisma = getPrisma();
@@ -168,13 +234,18 @@ export function Contacts({ active }: { active: boolean }): React.ReactElement {
       {mode === "confirm-delete" && contacts[selected] && (
         <Box marginTop={1}>
           <Text color={colors.warning}>
-            Delete "{contacts[selected].name ?? contacts[selected].phone}" and all their
-            interests/conversations? y confirm, any other key to cancel.
+            Delete "{confirmName}" and all their interests/conversations?{" "}
+            <Text color={colors.success}>[y] Confirm</Text>
+            {"  "}
+            <Text color={colors.textDim}>[esc] Cancel</Text>
           </Text>
         </Box>
       )}
       <Box marginTop={1}>
-        <Text dimColor>↑/↓ select, ↵ view details, d delete</Text>
+        <Text dimColor>
+          {"↑/↓ select · ↵ view details · "}
+          <Text color={colors.accent}>[d] Delete</Text>
+        </Text>
       </Box>
     </Box>
   );

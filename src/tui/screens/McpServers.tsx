@@ -5,8 +5,9 @@ import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { getPrisma } from "../../db/prisma.js";
 import { TextInput } from "../TextInput.js";
-import { colors, icons } from "../theme.js";
+import { colors, icons, shellGeometry } from "../theme.js";
 import { scaledInterval } from "../terminal-env.js";
+import { labelRegion, useClickRegions, type ClickRegion } from "../clickRegions.js";
 
 const MCP_POLL_MS = 4000;
 
@@ -23,7 +24,13 @@ interface McpRow {
 const TRANSPORTS = ["stdio", "http"] as const;
 const FIELDS = ["name", "transport", "command", "args", "url"] as const;
 
-export function McpServers({ active }: { active: boolean }): React.ReactElement {
+export function McpServers({
+  active,
+  onActivate,
+}: {
+  active: boolean;
+  onActivate?: () => void;
+}): React.ReactElement {
   const [servers, setServers] = useState<McpRow[]>([]);
   const [selected, setSelected] = useState(0);
   const [mode, setMode] = useState<"list" | "form">("list");
@@ -86,20 +93,87 @@ export function McpServers({ active }: { active: boolean }): React.ReactElement 
 
       if (key.upArrow) setSelected((i) => Math.max(0, i - 1));
       else if (key.downArrow) setSelected((i) => Math.min(servers.length - 1, i + 1));
-      else if (input === "n") {
-        setForm({ name: "", transportIdx: 0, command: "", args: "", url: "" });
-        setFieldIndex(0);
-        setMode("form");
-      } else if (input === "e" && servers[selected]) {
-        void toggleEnabled(servers[selected]);
-      } else if (input === "d" && servers[selected]) {
-        void remove(servers[selected].id);
-      } else if (input === "t" && servers[selected]) {
-        void test(servers[selected]);
-      }
+      else if (input === "n") startNewServer();
+      else if (input === "e") toggleSelectedEnabled();
+      else if (input === "d") deleteSelected();
+      else if (input === "t") testSelected();
     },
     { isActive: active }
   );
+
+  // Shared handlers -- called identically from the keyboard above and from
+  // click regions below, one code path per action.
+  function startNewServer() {
+    setForm({ name: "", transportIdx: 0, command: "", args: "", url: "" });
+    setFieldIndex(0);
+    setMode("form");
+  }
+  function toggleSelectedEnabled() {
+    if (servers[selected]) void toggleEnabled(servers[selected]);
+  }
+  function deleteSelected() {
+    if (servers[selected]) void remove(servers[selected].id);
+  }
+  function testSelected() {
+    if (servers[selected]) void test(servers[selected]);
+  }
+
+  // Click regions ------------------------------------------------------
+  //
+  // Same "N boxes with a gap between them" shape as Providers.tsx: each
+  // server box is 4 rows tall (border, name/status, transport line,
+  // border), with 1 blank gap row between boxes.
+  const listClickRegions: ClickRegion[] = [];
+  const formClickRegions: ClickRegion[] = [];
+
+  if (mode === "list") {
+    const firstBoxTop = shellGeometry.screenTopRow + 1;
+    for (let i = 0; i < servers.length; i++) {
+      const boxTop = firstBoxTop + i * 5;
+      listClickRegions.push({
+        rowStart: boxTop,
+        rowEnd: boxTop + 3,
+        colStart: shellGeometry.screenLeftCol,
+        colEnd: 9999,
+        onClick: () => {
+          setSelected(i);
+          onActivate?.();
+        },
+      });
+    }
+    const listHeight = servers.length > 0 ? servers.length * 5 - 1 : 1;
+    const rowAfterList = firstBoxTop + listHeight;
+    const extraLines = testing || testResult ? 2 : 0;
+    const footerRow = rowAfterList + extraLines + 1;
+    const footerLine = "[n] New · [e] Toggle Enabled · [d] Delete · [t] Test";
+    const buttons: [string, () => void][] = [
+      ["[n] New", () => { onActivate?.(); startNewServer(); }],
+      ["[e] Toggle Enabled", () => { onActivate?.(); toggleSelectedEnabled(); }],
+      ["[d] Delete", () => { onActivate?.(); deleteSelected(); }],
+      ["[t] Test", () => { onActivate?.(); testSelected(); }],
+    ];
+    for (const [label, onClick] of buttons) {
+      const region = labelRegion(footerLine, footerRow, shellGeometry.screenLeftCol, label, onClick);
+      if (region) listClickRegions.push(region);
+    }
+  } else {
+    const fieldsStartRow = shellGeometry.screenTopRow + 1;
+    for (let i = 0; i < FIELDS.length; i++) {
+      const row = fieldsStartRow + i;
+      formClickRegions.push({
+        rowStart: row,
+        rowEnd: row,
+        colStart: shellGeometry.screenLeftCol,
+        colEnd: 9999,
+        onClick: () => {
+          onActivate?.();
+          setFieldIndex(i);
+        },
+      });
+    }
+  }
+
+  useClickRegions(mode === "list" ? listClickRegions : formClickRegions, active);
 
   async function saveForm() {
     const prisma = getPrisma();
@@ -245,7 +319,10 @@ export function McpServers({ active }: { active: boolean }): React.ReactElement 
         </Box>
       )}
       <Box marginTop={1}>
-        <Text dimColor>n new · e toggle enabled · d delete · t test connection</Text>
+        <Text dimColor>
+          <Text color={colors.accent}>[n] New</Text> · <Text color={colors.accent}>[e] Toggle Enabled</Text> ·{" "}
+          <Text color={colors.accent}>[d] Delete</Text> · <Text color={colors.accent}>[t] Test</Text>
+        </Text>
       </Box>
     </Box>
   );
