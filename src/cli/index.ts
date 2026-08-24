@@ -8,7 +8,7 @@ import { enableSynchronizedOutput } from "../tui/synchronized-output.js";
 import { OnboardingWizard } from "./onboarding.js";
 import { configExists, loadConfig } from "../config/config.js";
 import { getAuthDir, getConfigPath, getOpenrmHome, getSoulPath } from "../setup/paths.js";
-import { connect } from "../whatsapp/client.js";
+import { connect, reconnectFresh } from "../whatsapp/client.js";
 import { registerMessageHandlers } from "../whatsapp/handlers.js";
 import { disconnectPrisma } from "../db/prisma.js";
 
@@ -27,10 +27,10 @@ function applyConfigToEnv(): void {
  * dashboard. This is the only place that wires the reactive inbound-message
  * pipeline to a live socket.
  */
-async function launchDashboard(): Promise<void> {
+async function launchDashboard(options: { fresh?: boolean } = {}): Promise<void> {
   enableSynchronizedOutput(process.stdout);
   applyConfigToEnv();
-  const sock = await connect();
+  const sock = options.fresh ? await reconnectFresh() : await connect();
   registerMessageHandlers(sock);
   render(React.createElement(App));
 }
@@ -82,13 +82,17 @@ program
 program
   .command("pair")
   .description("Connect to WhatsApp and show the pairing QR code / dashboard")
-  .action(async () => {
+  .option(
+    "--fresh",
+    "clear only the WhatsApp auth session (not config.json or soul.md) and generate a new QR"
+  )
+  .action(async (opts: { fresh?: boolean }) => {
     if (!configExists()) {
       console.error("openrm has not been set up yet. Run `openrm init` first.");
       process.exitCode = 1;
       return;
     }
-    await launchDashboard();
+    await launchDashboard({ fresh: opts.fresh });
   });
 
 program
@@ -104,7 +108,9 @@ program
     if (!opts.yes) {
       console.log(
         `This will delete ${home} (config, WhatsApp auth/session, soul.md). ` +
-          "Re-run with --yes to confirm."
+          "Re-run with --yes to confirm. " +
+          "Just need a new QR code? Use `openrm pair --fresh` instead -- it only " +
+          "clears the WhatsApp session, leaving config.json and soul.md intact."
       );
       return;
     }

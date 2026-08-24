@@ -427,7 +427,7 @@ function ActiveScreen({
     case "dashboard":
       return <Dashboard />;
     case "pairing":
-      return <Pairing />;
+      return <Pairing active={active} />;
     case "conversations":
       return <ConversationsFeed />;
     case "contacts":

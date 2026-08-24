@@ -1,20 +1,24 @@
 import React, { useEffect, useState } from "react";
-import { Box, Text } from "ink";
+import { Box, Text, useInput } from "ink";
 import { eventBus, type WaStatus } from "../events.js";
 import { renderQrToString } from "../qr.js";
 import { colors, icons, waStatusColor, waStatusLabel } from "../theme.js";
 import { scaledInterval } from "../terminal-env.js";
+import { reconnectFresh } from "../../whatsapp/client.js";
+import { registerMessageHandlers } from "../../whatsapp/handlers.js";
 
 // Rows of chrome that are NOT the QR block itself, on this screen, given
 // the current JSX below: title, status line (+ its marginTop), the margin
 // before the bordered panel, the panel's own border + paddingY, the "Scan
-// with..." line (+ its marginTop before the QR text), and the "Waiting for
-// scan..." line. Kept in sync by hand with the JSX below -- if you change
-// the structure of the "scan" stage block, update this.
+// with..." line (+ its marginTop before the QR text), the "Waiting for
+// scan..." line, and the "press r to regenerate" hint (+ its marginTop).
+// Kept in sync by hand with the JSX below -- if you change the structure of
+// the "scan" stage block, update this.
 const PAIRING_NON_QR_ROWS = 1 /* title */ + 2 /* status + its marginTop */ + 1 /* margin before panel */ +
   1 /* panel border top */ + 1 /* panel paddingY top */ + 1 /* "Scan with..." line */ +
-  1 /* margin before QR text */ + 1 /* "Waiting for scan..." line */ + 1 /* panel paddingY bottom */ +
-  1 /* panel border bottom */;
+  1 /* margin before QR text */ + 1 /* "Waiting for scan..." line */ +
+  1 /* margin before regenerate hint */ + 1 /* "press r to regenerate" line */ +
+  1 /* panel paddingY bottom */ + 1 /* panel border bottom */;
 
 // Rows of chrome App.tsx wraps around every screen: status bar (3), help
 // bar (1), and the content pane's own border + paddingY (4). Kept in sync
@@ -39,10 +43,11 @@ function Spinner({ color }: { color: string }): React.ReactElement {
   return <Text color={color}>{icons.spinner[frame]}</Text>;
 }
 
-export function Pairing(): React.ReactElement {
+export function Pairing({ active = true }: { active?: boolean } = {}): React.ReactElement {
   const [status, setStatus] = useState<WaStatus>("idle");
   const [qrString, setQrString] = useState<string | undefined>(undefined);
   const [detail, setDetail] = useState<string | undefined>(undefined);
+  const [refreshing, setRefreshing] = useState(false);
 
   useEffect(() => {
     const onStatus = (e: { status: WaStatus; detail?: string }) => {
@@ -97,6 +102,35 @@ export function Pairing(): React.ReactElement {
   const qrLineCount = qrString ? qrString.split("\n").length : 0;
   const qrFitsOnScreen = qrString ? qrLineCount <= availableQrRows : false;
 
+  // In-TUI "regenerate QR" recovery: clears only the WhatsApp auth session
+  // (never config.json or soul.md -- see client.ts's reconnectFresh) and
+  // reconnects, landing back on this same screen with a fresh QR, without
+  // ever leaving the dashboard process. Available from "stalled" (the
+  // confirmed logged-out dead end, where Baileys will otherwise never
+  // generate a new QR on its own) and also from "scan" for a user who wants
+  // to force-regenerate a stuck/stale code.
+  const canRefresh = stage === "stalled" || stage === "scan";
+
+  async function handleRefresh(): Promise<void> {
+    if (refreshing) return;
+    setRefreshing(true);
+    try {
+      const sock = await reconnectFresh();
+      registerMessageHandlers(sock);
+    } catch (err) {
+      setDetail(`Failed to regenerate QR: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setRefreshing(false);
+    }
+  }
+
+  useInput((input) => {
+    if (!active || refreshing) return;
+    if (input === "r" && canRefresh) {
+      void handleRefresh();
+    }
+  });
+
   return (
     <Box flexDirection="column">
       <Text bold color={colors.text}>
@@ -147,7 +181,12 @@ export function Pairing(): React.ReactElement {
                 </Text>
               )}
             </Box>
-            <Text dimColor>Waiting for scan...</Text>
+            <Text dimColor>{refreshing ? "Regenerating QR..." : "Waiting for scan..."}</Text>
+            <Box marginTop={1}>
+              <Text dimColor>
+                Stuck or stale code? Press <Text color={colors.accent}>r</Text> to regenerate it.
+              </Text>
+            </Box>
           </Box>
         )}
 
@@ -175,8 +214,23 @@ export function Pairing(): React.ReactElement {
             </Text>
             <Box marginTop={1}>
               <Text>
-                Run <Text color={colors.accent}>openrm reset --yes</Text> then{" "}
-                <Text color={colors.accent}>openrm init</Text> to start a fresh pairing.
+                {refreshing ? (
+                  <>
+                    <Spinner color={colors.warning} /> Regenerating QR...
+                  </>
+                ) : (
+                  <>
+                    Press <Text color={colors.accent}>r</Text> to clear the WhatsApp session and get
+                    a fresh QR right here.
+                  </>
+                )}
+              </Text>
+            </Box>
+            <Box marginTop={1}>
+              <Text dimColor>
+                Need to wipe everything instead (e.g. changing databases)? Run{" "}
+                <Text color={colors.accent}>openrm reset --yes</Text> then{" "}
+                <Text color={colors.accent}>openrm init</Text>.
               </Text>
             </Box>
           </Box>
