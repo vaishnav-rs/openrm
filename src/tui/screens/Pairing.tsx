@@ -62,14 +62,29 @@ export function Pairing(): React.ReactElement {
     };
   }, []);
 
-  const stage: "waiting" | "connecting" | "scan" | "connected" =
+  // "logged_out" used to fall into the same generic "waiting" bucket as a
+  // fresh, never-yet-connected session -- showing "Waiting for a QR code
+  // from WhatsApp..." even though Baileys had already given up and will
+  // NEVER generate a new QR on its own once a session is logged out (see
+  // client.ts: it deliberately does not auto-reconnect in that specific
+  // case, since a logged-out session's auth is dead and needs clearing).
+  // That completely masked the real state. Give it its own "stalled" stage
+  // with an explicit, actionable message instead.
+  //
+  // "disconnected" is different -- client.ts DOES auto-reconnect from that
+  // state on its own, so it's transient by design, not a dead end; it's
+  // handled by the "connecting" stage below alongside its `detail` text
+  // ("Connection dropped, reconnecting...") rather than treated as stalled.
+  const stage: "waiting" | "connecting" | "scan" | "connected" | "stalled" =
     status === "connected"
       ? "connected"
       : qrString
         ? "scan"
-        : status === "connecting"
+        : status === "connecting" || status === "disconnected"
           ? "connecting"
-          : "waiting";
+          : status === "logged_out"
+            ? "stalled"
+            : "waiting";
 
   // Guard against rendering a QR block taller than the guaranteed-visible
   // area: a clipped QR can look plausible but fails to decode (this
@@ -99,7 +114,15 @@ export function Pairing(): React.ReactElement {
         </Box>
       )}
 
-      <Box marginTop={1} flexDirection="column" alignItems="center" borderStyle="round" borderColor={stage === "connected" ? colors.success : colors.border} paddingX={2} paddingY={1}>
+      <Box
+        marginTop={1}
+        flexDirection="column"
+        alignItems="center"
+        borderStyle="round"
+        borderColor={stage === "connected" ? colors.success : stage === "stalled" ? colors.error : colors.border}
+        paddingX={2}
+        paddingY={1}
+      >
         {stage === "connected" && (
           <Box flexDirection="column" alignItems="center">
             <Text color={colors.success} bold>
@@ -139,6 +162,23 @@ export function Pairing(): React.ReactElement {
           <Box flexDirection="row" gap={1}>
             <Spinner color={colors.muted} />
             <Text dimColor>Waiting for a QR code from WhatsApp...</Text>
+          </Box>
+        )}
+
+        {stage === "stalled" && (
+          <Box flexDirection="column" alignItems="center">
+            <Text color={colors.error} bold>
+              {icons.cross} Session logged out
+            </Text>
+            <Text dimColor>
+              This WhatsApp session was logged out and can't generate a new QR on its own.
+            </Text>
+            <Box marginTop={1}>
+              <Text>
+                Run <Text color={colors.accent}>openrm reset --yes</Text> then{" "}
+                <Text color={colors.accent}>openrm init</Text> to start a fresh pairing.
+              </Text>
+            </Box>
           </Box>
         )}
       </Box>
