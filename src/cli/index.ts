@@ -4,6 +4,7 @@ import { existsSync, rmSync } from "node:fs";
 import React from "react";
 import { render } from "ink";
 import { App, MOUSE_DISABLE_SEQUENCE } from "../tui/App.js";
+import { enableSynchronizedOutput } from "../tui/synchronized-output.js";
 import { OnboardingWizard } from "./onboarding.js";
 import { configExists, loadConfig } from "../config/config.js";
 import { getAuthDir, getConfigPath, getOpenrmHome, getSoulPath } from "../setup/paths.js";
@@ -27,6 +28,7 @@ function applyConfigToEnv(): void {
  * pipeline to a live socket.
  */
 async function launchDashboard(): Promise<void> {
+  enableSynchronizedOutput(process.stdout);
   applyConfigToEnv();
   const sock = await connect();
   registerMessageHandlers(sock);
@@ -34,6 +36,7 @@ async function launchDashboard(): Promise<void> {
 }
 
 async function runOnboardingThenLaunch(): Promise<void> {
+  enableSynchronizedOutput(process.stdout);
   await new Promise<void>((resolve) => {
     const { unmount } = render(
       React.createElement(OnboardingWizard, {
