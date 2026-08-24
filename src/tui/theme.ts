@@ -70,6 +70,8 @@ export const icons = {
   save: "💾",
   edit: "✎",
   lock: "🔒",
+  bot: "🤖",
+  human: "👤",
 } as const;
 
 export const spacing = {

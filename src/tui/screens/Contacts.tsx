@@ -3,6 +3,7 @@ import { Box, Text, useInput } from "ink";
 import { getPrisma } from "../../db/prisma.js";
 import { colors, icons, padCol } from "../theme.js";
 import { scaledInterval } from "../terminal-env.js";
+import { formatPhone } from "../phone.js";
 
 const CONTACTS_POLL_MS = 4000;
 
@@ -18,7 +19,7 @@ interface ConversationDetail {
   messages: { role: string; content: string; createdAt: Date }[];
 }
 
-const COL = { name: 20, phone: 16, interests: 10, lastSeen: 16 };
+const COL = { name: 20, phone: 20, interests: 10, lastSeen: 16 };
 
 export function Contacts({ active }: { active: boolean }): React.ReactElement {
   const [contacts, setContacts] = useState<ContactRow[]>([]);
@@ -115,7 +116,7 @@ export function Contacts({ active }: { active: boolean }): React.ReactElement {
     return (
       <Box flexDirection="column">
         <Text bold color={colors.text}>
-          {icons.contact} {contact.name ?? "(no name)"} <Text color={colors.textDim}>-- {contact.phone}</Text>
+          {icons.contact} {contact.name ?? "(no name)"} <Text color={colors.textDim}>-- {formatPhone(contact.phone)}</Text>
         </Text>
         <Box marginTop={1} flexDirection="column" borderStyle="round" borderColor={colors.border} paddingX={1}>
           <Text color={colors.mutedDim}>INTERESTS</Text>
@@ -158,7 +159,7 @@ export function Contacts({ active }: { active: boolean }): React.ReactElement {
           return (
             <Text key={c.id} color={isSel ? colors.accent : colors.text} bold={isSel}>
               {isSel ? icons.arrowRight : " "} {padCol(c.name ?? "(no name)", COL.name)}{" "}
-              {padCol(c.phone, COL.phone)} {padCol(String(c.interests.length), COL.interests)}{" "}
+              {padCol(formatPhone(c.phone), COL.phone)} {padCol(String(c.interests.length), COL.interests)}{" "}
               {padCol(c.updatedAt.toLocaleDateString(), COL.lastSeen)}
             </Text>
           );

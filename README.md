@@ -9,22 +9,23 @@ into Postgres.
 
 ## It never starts a conversation
 
-**openrm only ever replies to an inbound WhatsApp message from a contact who
-messaged it first.** There is no scheduler, cron job, queue-drainer, or
-broadcast path anywhere in this codebase. The *entire* codebase has exactly
-two calls to `sock.sendMessage(...)` (the Baileys "send" API), and both live
-in [`src/whatsapp/handlers.ts`](./src/whatsapp/handlers.ts) so the guarantee
+**openrm's agent never starts a conversation with a customer on its own.**
+There is no scheduler, cron job, queue-drainer, or broadcast path anywhere in
+this codebase. The *entire* codebase has exactly three calls to
+`sock.sendMessage(...)` (the Baileys "send" API), and all three live in
+[`src/whatsapp/handlers.ts`](./src/whatsapp/handlers.ts) so the guarantee
 below stays auditable from one file:
 
 ```sh
 grep -rn "sendMessage" src/
 ```
 
-You should find exactly two functional call sites:
+You should find exactly three functional call sites:
 
 1. **The reactive customer reply** -- directly inside the `messages.upsert`
    handler, sending only to the JID that triggered it. Unchanged since the
-   very first version of this app.
+   very first version of this app. (Skipped, sending nothing, when the
+   conversation has been manually taken over by a human -- see #3 below.)
 2. **Human handoff staff alert** (`notifyStaffOfEscalation`) -- a narrow,
    deliberate exception, not a violation of the guarantee above. When the
    agent's `request_human_handoff` tool
@@ -39,10 +40,30 @@ You should find exactly two functional call sites:
    fires **only** as a direct, synchronous consequence of a real inbound
    customer message (there is no timer/queue path to it), and it **never**
    messages a customer or any new/discovered external party -- only the
-   single fixed internal staff number the business itself configured. The
-   dashboard's "Conversations" screen surfaces flagged conversations so
-   staff can see them and take over from their own WhatsApp app; openrm
-   itself never sends anything further on that conversation once flagged.
+   single fixed internal staff number the business itself configured.
+3. **Manual staff reply** (`sendManualMessage`) -- fundamentally different in
+   kind from #1 and #2, and the one exception that is not "reactive to an
+   inbound message" at all: it's a human operator directly using the
+   dashboard's **Conversations** screen
+   ([`src/tui/screens/ConversationsFeed.tsx`](./src/tui/screens/ConversationsFeed.tsx))
+   as a live-chat console -- selecting a contact, typing into the compose
+   box at the bottom of that screen, and pressing Enter -- exactly like
+   using WhatsApp Web itself, just through this dashboard. **It is never
+   triggerable by the agent/LLM or by any tool** -- there is no AgentTool,
+   MCP tool, or orchestrator branch anywhere that calls it; its only caller
+   is that screen's Enter-key handler, gated on the operator having
+   explicitly navigated into the compose box (`focus === "compose"`). Sending
+   a manual message also flags the conversation `humanControlled = true` (via
+   the screen's "Jump In" keybinding, or automatically alongside the send),
+   which makes `src/agent/orchestrator.ts`'s `handleInbound` skip the
+   automatic reply loop for that conversation entirely -- so the bot and a
+   human staff member can never reply to the same customer message at the
+   same time. A "Release to bot" toggle in the same screen clears
+   `humanControlled` and hands the conversation back to the agent; it is
+   never a one-way trap. The dashboard surfaces conversations flagged
+   `needsHuman` with a red row highlight so staff can see and jump into them
+   without leaving the app; openrm itself never sends anything on a
+   conversation beyond these three explicit cases.
 
 ## Install
 
@@ -151,9 +172,13 @@ before ingesting any documents, then re-run migrations.
 
 - **Dashboard** -- connection status, contact/message counts.
 - **Pairing** -- live QR code + connection state.
-- **Conversations** -- recent message history plus a live inbound/outbound
-  stream, and a "Needs Human" panel listing conversations flagged by
-  `request_human_handoff` for staff to pick up on their own WhatsApp.
+- **Conversations** -- a per-conversation view: a live-updating list of
+  conversations on the left (most recently active first, rows needing a
+  human highlighted in red), the selected contact's full message thread on
+  the right, a "Jump In" / "Release to bot" toggle (`j`) that pauses/resumes
+  the agent's automatic replies for that conversation, and a compose box to
+  send a reply directly as staff (see "It never starts a conversation"
+  above for exactly how that interacts with the reactive-only guarantee).
 - **Contacts** -- browse contacts, drill into interests + history.
 - **Providers** -- add/activate/test LLM providers.
 - **Soul** -- edit `~/.openrm/soul.md` directly.

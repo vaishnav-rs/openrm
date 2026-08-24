@@ -93,6 +93,11 @@ async function getOrCreateConversation(contactId: string) {
  * This function never sends anything over WhatsApp itself -- it only
  * computes a reply. The caller (src/whatsapp/handlers.ts) is responsible for
  * actually calling sock.sendMessage with the returned text.
+ *
+ * Returns "" (and sends nothing further) when Conversation.humanControlled
+ * is true -- see the check just below. The caller must treat an empty
+ * string as "no bot reply was generated," not send it to WhatsApp, and not
+ * emit a message:out event for it.
  */
 export async function handleInbound(jid: string, text: string): Promise<string> {
   const prisma = getPrisma();
@@ -110,6 +115,18 @@ export async function handleInbound(jid: string, text: string): Promise<string> 
     data: { conversationId: conversation.id, role: "user", content: text },
   });
 
+  // A human staff member has taken manual control of this conversation from
+  // the dashboard's "Jump In" (src/tui/screens/ConversationsFeed.tsx). The
+  // inbound message is still persisted above so it appears live in the
+  // dashboard thread, but the automatic tool-calling reply loop is skipped
+  // entirely -- generating and sending a bot reply here would race with
+  // whatever the human is about to type, which is exactly the collision
+  // this switch exists to prevent. Control returns to the bot only via the
+  // explicit "release to bot" action in that same screen.
+  if (conversation.humanControlled) {
+    return "";
+  }
+
   const soul = loadSoul();
   const masterSystemPrompt = await loadMasterSystemPrompt();
   const groundingPolicy = await buildGroundingPolicy();
@@ -126,7 +143,16 @@ export async function handleInbound(jid: string, text: string): Promise<string> 
     { role: "system", content: systemPrompt },
     ...history.map(
       (m): ChatMessage => ({
-        role: m.role === "assistant" ? "assistant" : "user",
+        // "human" (a staff member's manual reply, see the "human" role doc
+        // comment on Message.role in prisma/schema.prisma) presents to the
+        // provider as an "assistant" turn: from the customer's perspective
+        // both a bot reply and a staff reply are just "the business
+        // replied", so the model should treat prior human replies as its
+        // own prior turns, not react to them as some other party. The
+        // dashboard/DB distinction between "human" and "assistant" is kept
+        // everywhere else (this mapping only affects what's sent to
+        // provider.chat()).
+        role: m.role === "assistant" || m.role === "human" ? "assistant" : "user",
         content: m.content,
       })
     ),

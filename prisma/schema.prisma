@@ -62,6 +62,18 @@ model Conversation {
   // Never set proactively -- see that tool's description for the exact policy.
   needsHuman  Boolean   @default(false)
   escalatedAt DateTime?
+  // True while a human staff member has manually taken over this conversation
+  // from the dashboard's Conversations screen ("Jump In"), either by pressing
+  // the jump-in keybinding or by sending a manual message (see
+  // src/tui/screens/ConversationsFeed.tsx and sendManualMessage in
+  // src/whatsapp/handlers.ts). While true, src/agent/orchestrator.ts's
+  // handleInbound skips the automatic tool-calling reply loop entirely for
+  // this conversation, so the bot and a human never reply to the same
+  // customer at the same time. Cleared by the explicit "release to bot"
+  // action in the same screen -- never a one-way trap. Independent of
+  // needsHuman: needsHuman is the agent's own (automatic) escalation signal,
+  // humanControlled is the actual "who is driving right now" switch.
+  humanControlled Boolean @default(false)
 
   @@index([contactId])
 }
@@ -70,7 +82,16 @@ model Message {
   id             String       @id @default(cuid())
   conversationId String
   conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
-  role           String // "user" | "assistant" | "tool"
+  // "user" (customer) | "assistant" (bot reply) | "tool" (tool output, not
+  // shown to the model as a normal turn) | "human" (a staff member's manual
+  // reply sent from the dashboard's Conversations screen). "human" is a
+  // distinct DB/UI role so the dashboard can visually tell a staff reply
+  // apart from a bot reply, but src/agent/orchestrator.ts maps "human" ->
+  // "assistant" specifically when building the message array sent to
+  // provider.chat() -- from the customer's perspective both are just "the
+  // business replied", and the model should treat prior human replies as
+  // its own conversational turns, not as some other role it might react to.
+  role           String
   content        String       @db.Text
   createdAt      DateTime     @default(now())
 

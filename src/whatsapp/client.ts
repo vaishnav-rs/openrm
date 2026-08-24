@@ -77,7 +77,10 @@ let resetting = false;
 /**
  * Returns the current Baileys socket, if a connection has been established
  * via connect(). Only src/whatsapp/handlers.ts should use this to call
- * sock.sendMessage -- and only ever in direct reply to an inbound message.
+ * sock.sendMessage -- see that file's top-of-file doc comment for the
+ * exactly three call sites this is allowed to power (the reactive customer
+ * reply, the staff escalation alert, and the dashboard's manual staff-reply
+ * compose box), and why each one is safe.
  */
 export function getSock(): WASocket | undefined {
   return sock;

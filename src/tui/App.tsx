@@ -429,7 +429,7 @@ function ActiveScreen({
     case "pairing":
       return <Pairing active={active} />;
     case "conversations":
-      return <ConversationsFeed />;
+      return <ConversationsFeed active={active} />;
     case "contacts":
       return <Contacts active={active} />;
     case "providers":
