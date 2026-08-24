@@ -1,0 +1,126 @@
+// Prisma schema for openrm
+//
+// Datasource: PostgreSQL with the pgvector extension enabled (see
+// prisma/migrations/0001_init/migration.sql, which runs
+// `CREATE EXTENSION IF NOT EXISTS vector;` before creating tables).
+//
+// Embedding dimension: Chunk.embedding is `vector(1536)`, matching
+// OpenAI's text-embedding-3-small / Ollama's nomic-embed-text-ish outputs.
+// If you use a provider/model with a different embedding dimension, adjust
+// the `vector(1536)` occurrences in this file AND in
+// prisma/migrations/0001_init/migration.sql to match, then re-run
+// `prisma migrate deploy` (or an appropriate new migration) before ingesting
+// any documents.
+//
+// Migration strategy: this package ships hand-authored SQL migrations
+// (prisma/migrations/**) rather than relying on `prisma migrate dev`
+// (which requires a live, empty dev database and interactive prompts --
+// unsuitable for a globally-installed CLI). At onboarding time, openrm runs
+// `prisma migrate deploy` against the user's DATABASE_URL, which is the
+// standard, non-interactive, production-safe way to apply migrations for a
+// distributed tool. `prisma validate` / `prisma generate` only read this
+// schema file and do not require a live database connection.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Contact {
+  id            String         @id @default(cuid())
+  phone         String         @unique
+  name          String?
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+  interests     Interest[]
+  conversations Conversation[]
+}
+
+model Interest {
+  id        String   @id @default(cuid())
+  contactId String
+  contact   Contact  @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  label     String
+  notes     String?
+  createdAt DateTime @default(now())
+
+  @@index([contactId])
+}
+
+model Conversation {
+  id        String    @id @default(cuid())
+  contactId String
+  contact   Contact   @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  createdAt DateTime  @default(now())
+  messages  Message[]
+
+  @@index([contactId])
+}
+
+model Message {
+  id             String       @id @default(cuid())
+  conversationId String
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  role           String // "user" | "assistant" | "tool"
+  content        String       @db.Text
+  createdAt      DateTime     @default(now())
+
+  @@index([conversationId])
+}
+
+model ProviderConfig {
+  id             String   @id @default(cuid())
+  name           String // "ollama" | "openai" | "anthropic" | "openai-compatible"
+  apiKey         String?
+  baseUrl        String?
+  model          String
+  embeddingModel String?
+  isActive       Boolean  @default(false)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+}
+
+// Singleton row, conventionally id = "1".
+model AgentConfig {
+  id                 String @id @default("1")
+  masterSystemPrompt String @db.Text
+}
+
+model McpServer {
+  id        String   @id @default(cuid())
+  name      String
+  transport String // "stdio" | "http"
+  command   String?
+  args      String[] @default([])
+  url       String?
+  enabled   Boolean  @default(true)
+  createdAt DateTime @default(now())
+}
+
+model Document {
+  id         String   @id @default(cuid())
+  filename   String
+  sourcePath String
+  createdAt  DateTime @default(now())
+  chunks     Chunk[]
+}
+
+model Chunk {
+  id         String                   @id @default(cuid())
+  documentId String
+  document   Document                 @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  content    String                   @db.Text
+  ordinal    Int
+  // Prisma has no native vector type; this is written/read exclusively via
+  // raw SQL ($queryRaw/$executeRaw) in src/rag/ingest.ts and
+  // src/agent/tools/rag.ts. `Unsupported(...)` lets `prisma generate`/
+  // `validate` succeed without Prisma trying to manage the column.
+  embedding  Unsupported("vector(1536)")?
+  createdAt  DateTime                 @default(now())
+
+  @@index([documentId])
+}

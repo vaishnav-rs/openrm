@@ -1,0 +1,59 @@
+# openrm docker-compose template
+#
+# Copied to ~/.openrm/docker-compose.yml by the onboarding wizard when you
+# choose to let openrm provision Postgres for you via Docker. You can also
+# copy this file yourself and run it manually with:
+#
+#   docker compose up -d postgres
+#
+# The `app` service is optional -- most users run the `openrm` CLI directly
+# on their host machine (it needs an interactive terminal for the Ink UI and
+# a QR code scan for WhatsApp pairing). It's included here so you can
+# containerize the whole stack if you prefer, e.g. on a headless server where
+# you attach to the container's TTY to scan the QR code.
+#
+# NOTE: nothing in this file is executed automatically by the tool that
+# authored this repository -- you must run `docker compose up` yourself.
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: openrm-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: openrm
+      POSTGRES_PASSWORD: openrm
+      POSTGRES_DB: openrm
+    ports:
+      - "5432:5432"
+    volumes:
+      - openrm-postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U openrm -d openrm"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # Optional: run the openrm CLI itself in a container. Requires an
+  # interactive TTY attached for QR-code pairing and the Ink dashboard:
+  #   docker compose run --rm app
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: openrm-app
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://openrm:openrm@postgres:5432/openrm?schema=public
+    volumes:
+      - openrm-auth:/root/.openrm
+    tty: true
+    stdin_open: true
+    profiles:
+      - app
+
+volumes:
+  openrm-postgres-data:
+  openrm-auth:

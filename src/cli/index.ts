@@ -1,0 +1,131 @@
+#!/usr/bin/env node
+import { Command } from "commander";
+import { existsSync, rmSync } from "node:fs";
+import React from "react";
+import { render } from "ink";
+import { App } from "../tui/App.js";
+import { OnboardingWizard } from "./onboarding.js";
+import { configExists, loadConfig } from "../config/config.js";
+import { getAuthDir, getConfigPath, getOpenrmHome, getSoulPath } from "../setup/paths.js";
+import { connect } from "../whatsapp/client.js";
+import { registerMessageHandlers } from "../whatsapp/handlers.js";
+import { disconnectPrisma } from "../db/prisma.js";
+
+function applyConfigToEnv(): void {
+  if (!configExists()) return;
+  const config = loadConfig();
+  // Env var wins if already set (matches src/config/env.ts's documented
+  // override behavior); otherwise fall back to the onboarding-time value.
+  if (!process.env.DATABASE_URL) {
+    process.env.DATABASE_URL = config.databaseUrl;
+  }
+}
+
+/**
+ * Boots WhatsApp connection + message handlers, then renders the Ink
+ * dashboard. This is the only place that wires the reactive inbound-message
+ * pipeline to a live socket.
+ */
+async function launchDashboard(): Promise<void> {
+  applyConfigToEnv();
+  const sock = await connect();
+  registerMessageHandlers(sock);
+  render(React.createElement(App));
+}
+
+async function runOnboardingThenLaunch(): Promise<void> {
+  await new Promise<void>((resolve) => {
+    const { unmount } = render(
+      React.createElement(OnboardingWizard, {
+        onComplete: () => {
+          unmount();
+          resolve();
+        },
+      })
+    );
+  });
+  await launchDashboard();
+}
+
+const program = new Command();
+
+program
+  .name("openrm")
+  .description(
+    "A WhatsApp-based CRM agent: pair a WhatsApp number via QR code, and let an " +
+      "LLM-powered agent reply to inbound customer messages while saving their " +
+      "name, phone number, and interests to Postgres. Never initiates conversations."
+  )
+  .version("0.1.0");
+
+program
+  .command("start", { isDefault: true })
+  .description("Start openrm (runs onboarding first if not yet configured)")
+  .action(async () => {
+    if (!configExists()) {
+      await runOnboardingThenLaunch();
+    } else {
+      await launchDashboard();
+    }
+  });
+
+program
+  .command("init")
+  .description("Run (or re-run) the onboarding wizard")
+  .action(async () => {
+    await runOnboardingThenLaunch();
+  });
+
+program
+  .command("pair")
+  .description("Connect to WhatsApp and show the pairing QR code / dashboard")
+  .action(async () => {
+    if (!configExists()) {
+      console.error("openrm has not been set up yet. Run `openrm init` first.");
+      process.exitCode = 1;
+      return;
+    }
+    await launchDashboard();
+  });
+
+program
+  .command("reset")
+  .description("Remove all local openrm state (~/.openrm): config, WhatsApp auth, soul.md")
+  .option("--yes", "skip confirmation")
+  .action(async (opts: { yes?: boolean }) => {
+    const home = getOpenrmHome();
+    if (!existsSync(home)) {
+      console.log("Nothing to reset -- ~/.openrm does not exist.");
+      return;
+    }
+    if (!opts.yes) {
+      console.log(
+        `This will delete ${home} (config, WhatsApp auth/session, soul.md). ` +
+          "Re-run with --yes to confirm."
+      );
+      return;
+    }
+    rmSync(home, { recursive: true, force: true });
+    console.log(`Removed ${home}.`);
+  });
+
+program
+  .command("status")
+  .description("Print current setup status without launching the dashboard")
+  .action(() => {
+    console.log(`Config file: ${getConfigPath()} -- ${configExists() ? "present" : "missing"}`);
+    console.log(`Auth dir: ${getAuthDir()} -- ${existsSync(getAuthDir()) ? "present" : "missing"}`);
+    console.log(`Soul file: ${getSoulPath()} -- ${existsSync(getSoulPath()) ? "present" : "missing"}`);
+    if (configExists()) {
+      const config = loadConfig();
+      console.log(`Onboarded at: ${config.onboardedAt}`);
+      console.log(`Provisioned via Docker: ${config.provisionedViaDocker}`);
+    }
+  });
+
+process.on("SIGINT", async () => {
+  await disconnectPrisma();
+  process.exit(0);
+});
+
+await program.parseAsync(process.argv);
