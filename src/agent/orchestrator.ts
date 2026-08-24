@@ -103,10 +103,16 @@ export async function handleInbound(jid: string, text: string): Promise<string> 
   const prisma = getPrisma();
   const phone = parsePhoneFromJid(jid);
 
+  // Persist the full JID (not just the parsed-out phone digits) on every
+  // inbound message, keeping it fresh -- see Contact.jid's doc comment in
+  // schema.prisma for why a digits-only reconstruction (`${phone}@s.whatsapp.net`)
+  // is not safe to rely on for outbound sends that don't already have a
+  // live JID in hand (i.e. anything other than the reactive reply below,
+  // which replies to `jid` directly).
   const contact = await prisma.contact.upsert({
     where: { phone },
-    update: {},
-    create: { phone },
+    update: { jid },
+    create: { phone, jid },
   });
 
   const conversation = await getOrCreateConversation(contact.id);

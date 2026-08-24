@@ -7,10 +7,11 @@ import {
   type MessageInEvent,
   type MessageOutEvent,
 } from "../events.js";
-import { colors, icons, padCol } from "../theme.js";
+import { colors, icons, padCol, shellGeometry } from "../theme.js";
 import { scaledInterval } from "../terminal-env.js";
 import { formatPhone } from "../phone.js";
 import { TextInput } from "../TextInput.js";
+import { useClickRegions, type ClickRegion } from "../clickRegions.js";
 
 const LIST_POLL_MS = 4000;
 const THREAD_POLL_MS = 4000;
@@ -25,6 +26,10 @@ interface ConversationRow {
   id: string;
   contactId: string;
   phone: string;
+  // Contact's real, last-known WhatsApp JID -- see sendManualMessage's doc
+  // comment in src/whatsapp/handlers.ts for why this must be preferred over
+  // reconstructing a JID from `phone` digits for the manual compose send.
+  jid: string | null;
   name: string | null;
   needsHuman: boolean;
   humanControlled: boolean;
@@ -60,6 +65,7 @@ async function loadConversationList(): Promise<ConversationRow[]> {
       id: r.id,
       contactId: r.contactId,
       phone: r.contact.phone,
+      jid: r.contact.jid,
       name: r.contact.name,
       needsHuman: r.needsHuman,
       humanControlled: r.humanControlled,
@@ -103,7 +109,13 @@ function timeAgo(date: Date): string {
  * never touches ComposeBox's internal typing state, which lives entirely
  * inside ComposeBox itself and is never lifted up here.
  */
-export function ConversationsFeed({ active = true }: { active?: boolean }): React.ReactElement {
+export function ConversationsFeed({
+  active = true,
+  onActivate,
+}: {
+  active?: boolean;
+  onActivate?: () => void;
+}): React.ReactElement {
   const [subFocus, setSubFocus] = useState<"list" | "compose">("list");
   const [selectedRow, setSelectedRow] = useState<ConversationRow | null>(null);
 
@@ -132,6 +144,7 @@ export function ConversationsFeed({ active = true }: { active?: boolean }): Reac
           focused={subFocus === "list"}
           onSelectionChange={handleSelectionChange}
           onEnterCompose={() => setSubFocus("compose")}
+          onActivate={onActivate}
         />
         <Box flexDirection="column" flexGrow={1} marginLeft={1}>
           {selectedRow ? (
@@ -159,6 +172,7 @@ export function ConversationsFeed({ active = true }: { active?: boolean }): Reac
                 active={composeKeyboardActive}
                 conversationId={selectedRow.id}
                 phone={selectedRow.phone}
+                jid={selectedRow.jid}
                 onEscape={() => setSubFocus("list")}
               />
             </>
@@ -192,11 +206,13 @@ function ConversationList({
   focused,
   onSelectionChange,
   onEnterCompose,
+  onActivate,
 }: {
   keyboardActive: boolean;
   focused: boolean;
   onSelectionChange: (row: ConversationRow | null) => void;
   onEnterCompose: () => void;
+  onActivate?: () => void;
 }): React.ReactElement {
   const [conversations, setConversations] = useState<ConversationRow[]>([]);
   const [selectedIndex, setSelectedIndex] = useState(0);
@@ -266,6 +282,46 @@ function ConversationList({
     Math.min(selectedIndex - Math.floor(VISIBLE_ROWS / 2), Math.max(0, conversations.length - VISIBLE_ROWS))
   );
   const visible = conversations.slice(windowStart, windowStart + VISIBLE_ROWS);
+
+  // Click regions ----------------------------------------------------------
+  //
+  // Row math: title (screenTopRow), a marginTop=1 blank row, then this
+  // list's own bordered box's top border -- so its first visible row lands
+  // on screenTopRow + 3, one row per visible (windowed) conversation, same
+  // as every other list screen in the app. Two regions per row: a narrow
+  // one over just the humanControlled marker glyph (column offset 2, right
+  // after the "arrow-or-space" selection indicator) that toggles jump-in
+  // for THAT row directly -- registered first so it wins over the wider
+  // row-select region underneath it -- and a wide one covering the rest of
+  // the row that just selects it, matching Up/Down.
+  const listStartRow = shellGeometry.screenTopRow + 3;
+  const clickRegions: ClickRegion[] = [];
+  visible.forEach((c, i) => {
+    const globalIndex = windowStart + i;
+    const row = listStartRow + i;
+    clickRegions.push({
+      rowStart: row,
+      rowEnd: row,
+      colStart: shellGeometry.screenLeftCol + 2,
+      colEnd: shellGeometry.screenLeftCol + 2,
+      onClick: () => {
+        onActivate?.();
+        setSelectedIndex(globalIndex);
+        void toggleHumanControlled(c);
+      },
+    });
+    clickRegions.push({
+      rowStart: row,
+      rowEnd: row,
+      colStart: shellGeometry.screenLeftCol,
+      colEnd: 9999,
+      onClick: () => {
+        onActivate?.();
+        setSelectedIndex(globalIndex);
+      },
+    });
+  });
+  useClickRegions(clickRegions, true);
 
   return (
     <Box
@@ -410,11 +466,13 @@ function ComposeBox({
   active,
   conversationId,
   phone,
+  jid,
   onEscape,
 }: {
   active: boolean;
   conversationId: string;
   phone: string;
+  jid: string | null;
   onEscape: () => void;
 }): React.ReactElement {
   const [text, setText] = useState("");
@@ -438,7 +496,7 @@ function ComposeBox({
     setSending(true);
     setError(undefined);
     try {
-      const result = await sendManualMessage({ conversationId, phone, text: value });
+      const result = await sendManualMessage({ conversationId, phone, jid, text: value });
       if (result.sent) {
         setText("");
         // sendManualMessage can report sent:true with an error attached --

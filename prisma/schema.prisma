@@ -33,6 +33,21 @@ datasource db {
 model Contact {
   id            String         @id @default(cuid())
   phone         String         @unique
+  // The full WhatsApp JID this contact last messaged from (e.g.
+  // "155512345678@s.whatsapp.net" -- or, for accounts on WhatsApp's LID
+  // addressing scheme, a "...@lid" JID with a different local part than
+  // `phone`). `phone` is only ever the digits parsed out of whichever JID
+  // arrived; it is NOT guaranteed to reconstruct back into a valid,
+  // routable JID via `${phone}@s.whatsapp.net`, which was the root cause of
+  // manual dashboard sends (src/whatsapp/handlers.ts's sendManualMessage)
+  // silently succeeding at the Baileys API layer while never actually
+  // reaching the phone -- the guessed JID simply didn't resolve to a real
+  // session. Kept up to date on every inbound message (see
+  // src/agent/orchestrator.ts's handleInbound) so it self-heals if
+  // WhatsApp's addressing for a contact ever changes; nullable because
+  // contacts created before this field existed won't have it until they
+  // message in again.
+  jid           String?
   name          String?
   createdAt     DateTime       @default(now())
   updatedAt     DateTime       @updatedAt

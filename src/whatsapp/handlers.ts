@@ -176,6 +176,21 @@ export async function notifyStaffOfEscalation(params: {
 export async function sendManualMessage(params: {
   conversationId: string;
   phone: string;
+  /**
+   * The contact's real, last-known WhatsApp JID (Contact.jid), if we have
+   * one on file. STRONGLY prefer this over reconstructing a JID from
+   * `phone` digits -- `${phone}@s.whatsapp.net` is a guess that can be
+   * wrong (e.g. for a contact on WhatsApp's LID addressing scheme, or any
+   * other JID shape besides the plain phone-number form), and Baileys'
+   * sendMessage() can resolve successfully at the API layer against a
+   * guessed JID that doesn't actually route to a real session -- meaning
+   * the dashboard shows "sent" while the phone receives nothing. This was
+   * a real, confirmed bug; see Contact.jid's doc comment in schema.prisma.
+   * Only falls back to the guess when `jid` is unset (a contact created
+   * before Contact.jid existed, and who hasn't messaged in again yet to
+   * self-heal it).
+   */
+  jid?: string | null;
   text: string;
 }): Promise<{ sent: boolean; error?: string }> {
   const trimmed = params.text.trim();
@@ -186,7 +201,7 @@ export async function sendManualMessage(params: {
     return { sent: false, error: "WhatsApp socket is not currently connected." };
   }
 
-  const jid = params.phone.includes("@") ? params.phone : `${params.phone}@s.whatsapp.net`;
+  const jid = params.jid || (params.phone.includes("@") ? params.phone : `${params.phone}@s.whatsapp.net`);
 
   try {
     await sock.sendMessage(jid, { text: trimmed });
