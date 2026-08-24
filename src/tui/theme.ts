@@ -80,8 +80,6 @@ export const spacing = {
 
 export const layout = {
   navWidth: 26,
-  statusBarHeight: 1,
-  helpBarHeight: 1,
 } as const;
 
 /** Small block-character sparkline built from an array of non-negative counts. */

@@ -153,7 +153,6 @@ export function App(): React.ReactElement {
   });
 
   const rows = process.stdout.rows ?? 32;
-  const contentHeight = Math.max(10, rows - layout.statusBarHeight - layout.helpBarHeight - 2);
 
   const statusDotColor = waStatusColor[waStatus] ?? colors.muted;
   const showDot = waStatus === "connecting" || waStatus === "qr" ? pulseOn : true;
@@ -167,6 +166,7 @@ export function App(): React.ReactElement {
         paddingX={1}
         borderStyle="round"
         borderColor={colors.border}
+        flexShrink={0}
       >
         <Box flexDirection="row" gap={1}>
           <Text bold color={colors.accent}>
@@ -200,7 +200,7 @@ export function App(): React.ReactElement {
           borderStyle="round"
           borderColor={focus === "nav" ? colors.borderFocus : colors.border}
           paddingX={1}
-          height={contentHeight}
+          flexShrink={0}
         >
           {NAV_GROUPS.map((group) => (
             <Box key={group.title} flexDirection="column" marginBottom={1}>
@@ -231,14 +231,14 @@ export function App(): React.ReactElement {
           borderColor={focus === "screen" ? colors.borderFocus : colors.border}
           paddingX={2}
           paddingY={1}
-          height={contentHeight}
+          overflow="hidden"
         >
           <ActiveScreen screen={active} active={focus === "screen"} />
         </Box>
       </Box>
 
       {/* Bottom help bar */}
-      <Box paddingX={1} justifyContent="space-between">
+      <Box paddingX={1} justifyContent="space-between" flexShrink={0}>
         <Text color={colors.mutedDim}>
           {focus === "nav"
             ? `${icons.caretUp}${icons.caretDown} navigate  ↵/→ open pane`
