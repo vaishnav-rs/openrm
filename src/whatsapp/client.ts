@@ -2,14 +2,65 @@ import {
   Browsers,
   DisconnectReason,
   fetchLatestWaWebVersion,
+  makeCacheableSignalKeyStore,
   makeWASocket,
   useMultiFileAuthState,
   type WASocket,
 } from "@whiskeysockets/baileys";
-import { mkdirSync, existsSync, rmSync } from "node:fs";
+import { mkdirSync, existsSync, rmSync, appendFileSync } from "node:fs";
 import { Boom } from "@hapi/boom";
-import { getAuthDir } from "../setup/paths.js";
+import pino from "pino";
+import { getAuthDir, getLogPath, getOpenrmHome } from "../setup/paths.js";
 import { eventBus } from "../tui/events.js";
+
+// In every real CLI flow ~/.openrm already exists by the time this module is
+// imported (openrm init / config.ts create it before `pair` becomes
+// reachable), but the pino destination below is opened at module-load time,
+// so this stays defensive rather than assuming that ordering holds forever.
+if (!existsSync(getOpenrmHome())) {
+  mkdirSync(getOpenrmHome(), { recursive: true });
+}
+
+// Baileys' own internal (pino) logger can reveal handshake-level details --
+// e.g. the specific WebSocket frame/error during the login handshake itself,
+// which happens *before* connection.update "close" ever fires -- that we'd
+// otherwise never capture. It's deliberately routed to the log file, NOT
+// stdout: Ink takes over the whole terminal, so anything Baileys wrote to
+// stdout would visually collide with (and get clobbered by) the TUI's own
+// redraws, which is likely part of why past pairing failures have had zero
+// visibility into what actually happened at the protocol level.
+const logPath = getLogPath();
+const baileysLogger = pino({ level: "debug" }, pino.destination({ dest: logPath, sync: true }));
+
+/**
+ * Appends a single timestamped line to ~/.openrm/openrm.log. Deliberately
+ * plain fs.appendFileSync (no logging library) for this app-level trail --
+ * separate from baileysLogger above, which is Baileys' own internal pino
+ * logger writing structured/verbose protocol-level logs to the same file.
+ * Kept so the log survives the TUI being closed: past pairing failures have
+ * been diagnosed completely blind because nothing outlived the process.
+ */
+function appendLog(line: string): void {
+  try {
+    appendFileSync(logPath, `[${new Date().toISOString()}] ${line}\n`);
+  } catch {
+    // Logging must never be the reason pairing itself fails.
+  }
+}
+
+/**
+ * Maps a Baileys close statusCode back to its DisconnectReason name (e.g.
+ * 428 -> "connectionClosed") for a readable log/detail message. Baileys
+ * exports DisconnectReason as a numeric TS enum, which at runtime is an
+ * object with both directions (name -> code AND code -> name) baked in, so
+ * this is just an indexed lookup -- falls back to the raw numeric code if
+ * it's not one of the known reasons (e.g. a raw WebSocket close code).
+ */
+function disconnectReasonName(statusCode: number | undefined): string {
+  if (statusCode === undefined) return "unknown";
+  const name = (DisconnectReason as unknown as Record<number, string>)[statusCode];
+  return name ?? String(statusCode);
+}
 
 let sock: WASocket | undefined;
 let connecting = false;
@@ -65,13 +116,21 @@ export async function connect(): Promise<WASocket> {
 
   const socket = makeWASocket({
     version,
-    auth: state,
+    // makeCacheableSignalKeyStore wraps state.keys so signal-protocol key
+    // reads are cached instead of hitting disk on every access. Baileys'
+    // own docs/examples use this rather than passing `state` directly --
+    // its absence is a documented common cause of session/handshake issues
+    // under real I/O latency, not just a performance nit.
+    auth: { creds: state.creds, keys: makeCacheableSignalKeyStore(state.keys, baileysLogger) },
     // Explicit, realistic client identification for the pairing handshake.
     // WA's servers can be picky about this specifically during linking; a
     // desktop-Chrome identity is the current recommended default for the
     // QR/pairing-code flow (see Baileys' Browsers helper).
     browser: Browsers.ubuntu("Chrome"),
     syncFullHistory: false,
+    // See baileysLogger above -- captures handshake-level detail Baileys
+    // doesn't otherwise surface via connection.update at all.
+    logger: baileysLogger,
   });
 
   socket.ev.on("creds.update", saveCreds);
@@ -80,27 +139,43 @@ export async function connect(): Promise<WASocket> {
     const { connection, lastDisconnect, qr } = update;
 
     if (qr) {
+      appendLog("QR code generated, waiting for scan.");
       eventBus.emitTyped("wa:qr", { qr });
       eventBus.emitTyped("wa:status", { status: "qr" });
     }
 
     if (connection === "open") {
+      appendLog("Connection open -- paired successfully.");
       eventBus.emitTyped("wa:status", { status: "connected" });
     }
 
     if (connection === "close") {
-      const statusCode = (lastDisconnect?.error as Boom | undefined)?.output?.statusCode;
+      const errorDetail = lastDisconnect?.error as Boom | undefined;
+      const statusCode = errorDetail?.output?.statusCode;
+      const reasonName = disconnectReasonName(statusCode);
+      const errorMessage = errorDetail?.message;
       const loggedOut = statusCode === DisconnectReason.loggedOut;
+
+      // Full detail -- statusCode, its DisconnectReason name, and the Boom
+      // error's own message (often the most specific piece of info; it can
+      // literally contain WhatsApp-side rejection text) -- for EVERY
+      // non-open close, not just the loggedOut special case. This used to
+      // be thrown away entirely, which is why every pairing failure so far
+      // has been diagnosed completely blind.
+      const rawDetail = `statusCode=${statusCode ?? "unknown"} reason=${reasonName}${
+        errorMessage ? ` message="${errorMessage}"` : ""
+      }`;
+      appendLog(`Connection closed. ${rawDetail}`);
 
       if (loggedOut) {
         eventBus.emitTyped("wa:status", {
           status: "logged_out",
-          detail: "Session logged out. Re-run pairing to reconnect.",
+          detail: `Session logged out. Re-run pairing to reconnect. (${rawDetail}) See ${logPath} for the full trail.`,
         });
       } else if (!resetting) {
         eventBus.emitTyped("wa:status", {
           status: "disconnected",
-          detail: "Connection dropped, reconnecting...",
+          detail: `Connection dropped, reconnecting... (${rawDetail}) See ${logPath} for the full trail.`,
         });
         void connect();
       }
