@@ -1,7 +1,47 @@
 import { readFileSync } from "node:fs";
-import { basename, extname } from "node:path";
+import { basename, extname, isAbsolute, normalize, resolve } from "node:path";
+import { homedir } from "node:os";
 import { getPrisma } from "../db/prisma.js";
 import { getActiveProvider } from "../providers/registry.js";
+
+/**
+ * Cleans up a user-supplied path before it's used for anything, and
+ * resolves it correctly whether it's absolute or relative.
+ *
+ * This guards against the common ways a pasted path arrives dirty from a
+ * raw single-line TextInput: surrounding quotes left over from Windows
+ * "Copy as path", trailing whitespace, and a leading `~`. Critically, an
+ * already-absolute path (including Windows drive-letter paths like
+ * `C:\...` and UNC paths like `\\server\share\...`, which `path.isAbsolute`
+ * correctly recognizes) must NOT be joined/resolved against `process.cwd()`
+ * -- doing that was the bug: it silently prefixed the cwd onto paths that
+ * were already absolute.
+ */
+export function resolveUserPath(input: string): string {
+  let cleaned = input.trim();
+
+  // Strip one layer of surrounding matching quotes, e.g. from a Windows
+  // "Copy as path" paste: "C:\Users\...\file.pdf".
+  if (
+    cleaned.length >= 2 &&
+    ((cleaned.startsWith('"') && cleaned.endsWith('"')) ||
+      (cleaned.startsWith("'") && cleaned.endsWith("'")))
+  ) {
+    cleaned = cleaned.slice(1, -1).trim();
+  }
+
+  // Expand a leading ~ or ~/ to the user's home directory.
+  if (cleaned === "~") {
+    cleaned = homedir();
+  } else if (cleaned.startsWith("~/") || cleaned.startsWith("~\\")) {
+    cleaned = homedir() + cleaned.slice(1);
+  }
+
+  if (isAbsolute(cleaned)) {
+    return normalize(cleaned);
+  }
+  return resolve(process.cwd(), cleaned);
+}
 
 const APPROX_CHARS_PER_TOKEN = 4;
 const CHUNK_TOKENS = 500;
@@ -52,15 +92,16 @@ export interface IngestResult {
  * cannot set an Unsupported("vector") column through the normal client API.
  */
 export async function ingestFile(path: string): Promise<IngestResult> {
-  const filename = basename(path);
-  const text = await readFileText(path);
+  const resolvedPath = resolveUserPath(path);
+  const filename = basename(resolvedPath);
+  const text = await readFileText(resolvedPath);
   const chunks = chunkText(text);
 
   const prisma = getPrisma();
   const provider = await getActiveProvider();
 
   const document = await prisma.document.create({
-    data: { filename, sourcePath: path },
+    data: { filename, sourcePath: resolvedPath },
   });
 
   for (let ordinal = 0; ordinal < chunks.length; ordinal++) {

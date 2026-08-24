@@ -1,3 +1,4 @@
+import { spawn } from "node:child_process";
 import type {
   ChatMessage,
   ChatResult,
@@ -11,6 +12,13 @@ export interface OllamaProviderConfig {
   embeddingModel?: string;
   baseUrl?: string;
 }
+
+// A dedicated embedding model to fall back to when the user hasn't
+// configured one explicitly. Most chat models don't serve /api/embeddings
+// well (or at all), so this must NOT be the chat model.
+const DEFAULT_EMBEDDING_MODEL = "nomic-embed-text";
+
+const LOCAL_HOSTNAMES = new Set(["localhost", "127.0.0.1", "::1"]);
 
 interface OllamaChatResponse {
   message?: {
@@ -39,7 +47,7 @@ export class OllamaProvider implements LLMProvider {
   constructor(config: OllamaProviderConfig) {
     this.baseUrl = (config.baseUrl ?? "http://localhost:11434").replace(/\/$/, "");
     this.model = config.model;
-    this.embeddingModel = config.embeddingModel ?? config.model;
+    this.embeddingModel = config.embeddingModel ?? DEFAULT_EMBEDDING_MODEL;
   }
 
   async chat(messages: ChatMessage[], tools: ToolDefinition[]): Promise<ChatResult> {
@@ -98,15 +106,88 @@ export class OllamaProvider implements LLMProvider {
   }
 
   async embed(text: string): Promise<number[]> {
+    return this.embedInternal(text, /* allowPullRetry */ true);
+  }
+
+  private async embedInternal(text: string, allowPullRetry: boolean): Promise<number[]> {
     const res = await fetch(`${this.baseUrl}/api/embeddings`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ model: this.embeddingModel, prompt: text }),
     });
+
     if (!res.ok) {
-      throw new Error(`Ollama embeddings request failed: ${res.status} ${await res.text()}`);
+      const bodyText = await res.text();
+      const notFound = res.status === 404 && /not found/i.test(bodyText);
+
+      if (notFound && allowPullRetry) {
+        if (!this.isLocalBaseUrl()) {
+          throw new Error(
+            `Ollama embedding model "${this.embeddingModel}" is not available at ${this.baseUrl}. ` +
+              `This baseUrl is not local, so it can't be auto-pulled from here -- ` +
+              `run \`ollama pull ${this.embeddingModel}\` on that host.`
+          );
+        }
+
+        await this.pullModel(this.embeddingModel);
+        // Retry exactly once after a successful pull.
+        return this.embedInternal(text, /* allowPullRetry */ false);
+      }
+
+      throw new Error(`Ollama embeddings request failed: ${res.status} ${bodyText}`);
     }
+
     const data = (await res.json()) as OllamaEmbeddingsResponse;
     return data.embedding;
+  }
+
+  private isLocalBaseUrl(): boolean {
+    try {
+      const hostname = new URL(this.baseUrl).hostname;
+      return LOCAL_HOSTNAMES.has(hostname);
+    } catch {
+      return false;
+    }
+  }
+
+  private pullModel(model: string): Promise<void> {
+    return new Promise((resolvePull, rejectPull) => {
+      const child = spawn("ollama", ["pull", model], { stdio: ["ignore", "pipe", "pipe"] });
+
+      let stderrOutput = "";
+      child.stdout?.on("data", () => {
+        // Streamed progress output; not surfaced anywhere right now, but
+        // consuming it keeps the pipe from backing up.
+      });
+      child.stderr?.on("data", (chunk: Buffer) => {
+        stderrOutput += chunk.toString("utf8");
+      });
+
+      child.on("error", (err: NodeJS.ErrnoException) => {
+        if (err.code === "ENOENT") {
+          rejectPull(
+            new Error(
+              "Ollama CLI not found on PATH -- install Ollama or pull the embedding model " +
+                `manually with \`ollama pull ${model}\`.`
+            )
+          );
+          return;
+        }
+        rejectPull(err);
+      });
+
+      child.on("close", (code) => {
+        if (code === 0) {
+          resolvePull();
+          return;
+        }
+        rejectPull(
+          new Error(
+            `Failed to auto-pull Ollama embedding model "${model}" (exit code ${code}). ` +
+              `${stderrOutput.trim()} Run \`ollama pull ${model}\` manually.`
+          )
+        );
+      });
+    });
   }
 }

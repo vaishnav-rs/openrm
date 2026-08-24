@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { Box, Text, useInput } from "ink";
+import { Box, Text, useInput, useStdout } from "ink";
 import { Dashboard } from "./screens/Dashboard.js";
 import { Pairing } from "./screens/Pairing.js";
 import { ConversationsFeed } from "./screens/ConversationsFeed.js";
@@ -55,6 +55,50 @@ const NAV_GROUPS: NavGroup[] = [
 
 const FLAT_ITEMS: NavItem[] = NAV_GROUPS.flatMap((g) => g.items);
 type ScreenKey = string;
+
+// --- Mouse support (nav column only) ---------------------------------
+//
+// SGR extended mouse mode: enabling it makes the terminal emit
+// `ESC [ < Cb ; Cx ; Cy M` on button press and `...m` on release, with
+// 1-based Cx/Cy terminal columns/rows. We only ever enable this while the
+// left nav column has focus, and explicitly disable it the instant focus
+// moves to the screen pane (see the effect below), on unmount, and on
+// process exit -- so raw mouse bytes can never leak into a TextInput /
+// TextArea field on another screen.
+export const MOUSE_ENABLE_SEQUENCE = "\x1b[?1000h\x1b[?1006h";
+export const MOUSE_DISABLE_SEQUENCE = "\x1b[?1000l\x1b[?1006l";
+
+const SGR_MOUSE_PATTERN = /\x1b\[<(\d+);(\d+);(\d+)([Mm])/;
+
+// Fixed row geometry of the chrome above the nav content:
+//   - status bar Box (borderStyle="round", single content row): 3 rows
+//   - nav Box's own top border: 1 row
+// so the first line of nav content (the first group's title) lands on
+// row STATUS_BAR_ROWS + NAV_TOP_BORDER_ROWS + 1.
+const STATUS_BAR_ROWS = 3;
+const NAV_TOP_BORDER_ROWS = 1;
+
+/**
+ * Mirrors the nav render loop's exact structure (group title line, then one
+ * line per item, then the group's marginBottom gap) to compute the absolute
+ * terminal row each nav item lands on. NAV_GROUPS is static, so this is
+ * computed once at module load rather than re-derived every render.
+ */
+function computeNavRowMap(): Map<string, number> {
+  const map = new Map<string, number>();
+  let row = STATUS_BAR_ROWS + NAV_TOP_BORDER_ROWS + 1;
+  for (const group of NAV_GROUPS) {
+    row += 1; // group title line
+    for (const item of group.items) {
+      map.set(item.key, row);
+      row += 1;
+    }
+    row += 1; // marginBottom gap after the group
+  }
+  return map;
+}
+
+const NAV_ROW_MAP = computeNavRowMap();
 
 interface ProviderInfo {
   name: string;
@@ -152,7 +196,88 @@ export function App(): React.ReactElement {
     }
   });
 
-  const rows = process.stdout.rows ?? 32;
+  // Enable SGR mouse click reporting only while the nav column has focus,
+  // and explicitly disable it the instant focus leaves nav (dep change) or
+  // this component unmounts (cleanup). This is what structurally prevents
+  // raw mouse bytes from ever reaching a TextInput/TextArea on another
+  // screen -- mouse mode is simply never on while focus === "screen".
+  useEffect(() => {
+    if (focus !== "nav") return;
+    process.stdout.write(MOUSE_ENABLE_SEQUENCE);
+    return () => {
+      process.stdout.write(MOUSE_DISABLE_SEQUENCE);
+    };
+  }, [focus]);
+
+  // Parse SGR mouse press sequences directly off stdin. This listener is
+  // additive -- Ink's own useInput/useStdin machinery consumes a separate
+  // internal "input" event derived from parse-keypress, which does not
+  // recognize `ESC [ < ... M` sequences, so they pass through inertly to
+  // any other "data" listener (verified by reading Ink's use-input.js /
+  // StdinContext.js source: it listens on stdin via its own internal
+  // EventEmitter, not by exclusively consuming raw "data" events).
+  useEffect(() => {
+    if (focus !== "nav") return;
+    const onData = (chunk: Buffer | string) => {
+      const str = typeof chunk === "string" ? chunk : chunk.toString("utf8");
+      const match = SGR_MOUSE_PATTERN.exec(str);
+      if (!match) return;
+      const [, buttonRaw, xRaw, yRaw, kind] = match;
+      if (kind !== "M") return; // only presses, ignore releases
+      const button = Number(buttonRaw);
+      if (button !== 0) return; // left click only
+      const x = Number(xRaw);
+      const y = Number(yRaw);
+      if (x < 1 || x > layout.navWidth) return; // outside nav column
+      for (const [key, row] of NAV_ROW_MAP) {
+        if (row !== y) continue;
+        const idx = FLAT_ITEMS.findIndex((item) => item.key === key);
+        if (idx >= 0) {
+          setSelectedIndex(idx);
+          setFocus("screen");
+        }
+        return;
+      }
+    };
+    process.stdin.on("data", onData);
+    return () => {
+      process.stdin.removeListener("data", onData);
+    };
+  }, [focus]);
+
+  // Belt-and-suspenders: also disable mouse mode on raw process exit (e.g.
+  // an uncaught exception unwinding without React ever unmounting). SIGINT
+  // is handled explicitly in src/cli/index.ts's handler.
+  useEffect(() => {
+    const onExit = () => {
+      process.stdout.write(MOUSE_DISABLE_SEQUENCE);
+    };
+    process.on("exit", onExit);
+    return () => {
+      process.removeListener("exit", onExit);
+    };
+  }, []);
+
+  // Ink's own render loop (see node_modules/ink/build/ink.js#onRender) takes
+  // a disruptive "clear the whole terminal and repaint from scratch" path
+  // whenever `outputHeight >= stdout.rows`, where outputHeight is the
+  // computed height of what WE render (i.e. this root Box's height). If we
+  // size the root to the terminal's *exact* row count, our own outputHeight
+  // is essentially always >= stdout.rows, so Ink takes the clear-and-repaint
+  // path on nearly every single render (instead of its normal smooth
+  // incremental diff/overwrite) -- this is what actually caused the
+  // flicker: not content overflowing a box, but us never leaving Ink any
+  // headroom to tell our frame apart from "the whole terminal". Reserving
+  // one row keeps outputHeight strictly below stdout.rows so Ink stays on
+  // the cheap incremental-update path.
+  //
+  // useStdout() (rather than reading process.stdout.rows inline) ties this
+  // to Ink's own resize plumbing -- it exposes the same live stdout object
+  // Ink itself listens to for 'resize' -- which is the more correct/idiomatic
+  // source here even though, functionally, Ink already forces a full
+  // re-render on resize regardless of which API reads .rows.
+  const { stdout } = useStdout();
+  const rows = Math.max(1, (stdout.rows ?? 32) - 1);
 
   const statusDotColor = waStatusColor[waStatus] ?? colors.muted;
   const showDot = waStatus === "connecting" || waStatus === "qr" ? pulseOn : true;
@@ -201,6 +326,7 @@ export function App(): React.ReactElement {
           borderColor={focus === "nav" ? colors.borderFocus : colors.border}
           paddingX={1}
           flexShrink={0}
+          overflow="hidden"
         >
           {NAV_GROUPS.map((group) => (
             <Box key={group.title} flexDirection="column" marginBottom={1}>
@@ -241,7 +367,7 @@ export function App(): React.ReactElement {
       <Box paddingX={1} justifyContent="space-between" flexShrink={0}>
         <Text color={colors.mutedDim}>
           {focus === "nav"
-            ? `${icons.caretUp}${icons.caretDown} navigate  ↵/→ open pane`
+            ? `${icons.caretUp}${icons.caretDown} navigate  ↵/→ open pane · click to open`
             : "esc/q/← back to nav  (see pane for keys)"}
         </Text>
         <Text color={colors.mutedDim}>

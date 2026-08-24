@@ -3,7 +3,7 @@ import { Command } from "commander";
 import { existsSync, rmSync } from "node:fs";
 import React from "react";
 import { render } from "ink";
-import { App } from "../tui/App.js";
+import { App, MOUSE_DISABLE_SEQUENCE } from "../tui/App.js";
 import { OnboardingWizard } from "./onboarding.js";
 import { configExists, loadConfig } from "../config/config.js";
 import { getAuthDir, getConfigPath, getOpenrmHome, getSoulPath } from "../setup/paths.js";
@@ -124,6 +124,10 @@ program
   });
 
 process.on("SIGINT", async () => {
+  // Make sure SGR mouse reporting is never left enabled in the user's
+  // terminal after openrm exits (see src/tui/App.tsx for why this must be
+  // disabled promptly).
+  process.stdout.write(MOUSE_DISABLE_SEQUENCE);
   await disconnectPrisma();
   process.exit(0);
 });
