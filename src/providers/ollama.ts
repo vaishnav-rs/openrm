@@ -1,4 +1,3 @@
-import { spawn } from "node:child_process";
 import type {
   ChatMessage,
   ChatResult,
@@ -6,6 +5,7 @@ import type {
   ToolCall,
   ToolDefinition,
 } from "./types.js";
+import { pullOllamaModel } from "./ollama-pull.js";
 
 export interface OllamaProviderConfig {
   model: string;
@@ -150,44 +150,15 @@ export class OllamaProvider implements LLMProvider {
     }
   }
 
-  private pullModel(model: string): Promise<void> {
-    return new Promise((resolvePull, rejectPull) => {
-      const child = spawn("ollama", ["pull", model], { stdio: ["ignore", "pipe", "pipe"] });
-
-      let stderrOutput = "";
-      child.stdout?.on("data", () => {
-        // Streamed progress output; not surfaced anywhere right now, but
-        // consuming it keeps the pipe from backing up.
-      });
-      child.stderr?.on("data", (chunk: Buffer) => {
-        stderrOutput += chunk.toString("utf8");
-      });
-
-      child.on("error", (err: NodeJS.ErrnoException) => {
-        if (err.code === "ENOENT") {
-          rejectPull(
-            new Error(
-              "Ollama CLI not found on PATH -- install Ollama or pull the embedding model " +
-                `manually with \`ollama pull ${model}\`.`
-            )
-          );
-          return;
-        }
-        rejectPull(err);
-      });
-
-      child.on("close", (code) => {
-        if (code === 0) {
-          resolvePull();
-          return;
-        }
-        rejectPull(
-          new Error(
-            `Failed to auto-pull Ollama embedding model "${model}" (exit code ${code}). ` +
-              `${stderrOutput.trim()} Run \`ollama pull ${model}\` manually.`
-          )
-        );
-      });
-    });
+  private async pullModel(model: string): Promise<void> {
+    try {
+      await pullOllamaModel(model, this.baseUrl);
+    } catch (err) {
+      throw new Error(
+        `Failed to auto-pull Ollama embedding model "${model}": ${
+          err instanceof Error ? err.message : String(err)
+        }. Run \`ollama pull ${model}\` manually, or set it from the Providers screen.`
+      );
+    }
   }
 }

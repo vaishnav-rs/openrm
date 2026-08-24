@@ -2,11 +2,51 @@ import React, { useEffect, useState } from "react";
 import { Box, Text, useInput } from "ink";
 import { getPrisma } from "../../db/prisma.js";
 import { instantiateProvider } from "../../providers/registry.js";
+import {
+  KNOWN_OLLAMA_EMBEDDING_MODELS,
+  pullOllamaModel,
+  type OllamaPullProgress,
+} from "../../providers/ollama-pull.js";
 import { TextInput } from "../TextInput.js";
 import { colors, icons } from "../theme.js";
 import { scaledInterval } from "../terminal-env.js";
 
 const PROVIDERS_POLL_MS = 4000;
+const DEFAULT_OLLAMA_BASE_URL = "http://localhost:11434";
+
+function PullSpinner(): React.ReactElement {
+  const [frame, setFrame] = useState(0);
+  useEffect(() => {
+    const id = setInterval(() => setFrame((f) => (f + 1) % icons.spinner.length), scaledInterval(150));
+    return () => clearInterval(id);
+  }, []);
+  return <Text color={colors.warning}>{icons.spinner[frame]}</Text>;
+}
+
+const PROGRESS_BAR_WIDTH = 30;
+
+function PullProgressBar({ progress }: { progress: OllamaPullProgress }): React.ReactElement {
+  if (progress.total && progress.completed !== undefined) {
+    const ratio = Math.min(1, progress.completed / progress.total);
+    const filled = Math.round(ratio * PROGRESS_BAR_WIDTH);
+    const bar = "█".repeat(filled) + "░".repeat(PROGRESS_BAR_WIDTH - filled);
+    const pct = Math.round(ratio * 100);
+    return (
+      <Box flexDirection="row" gap={1}>
+        <Text color={colors.accent}>{bar}</Text>
+        <Text color={colors.textDim}>
+          {pct}% · {progress.status}
+        </Text>
+      </Box>
+    );
+  }
+  return (
+    <Box flexDirection="row" gap={1}>
+      <PullSpinner />
+      <Text color={colors.textDim}>{progress.status}</Text>
+    </Box>
+  );
+}
 
 interface ProviderRow {
   id: string;
@@ -24,7 +64,7 @@ const FIELDS = ["name", "apiKey", "baseUrl", "model", "embeddingModel"] as const
 export function Providers({ active }: { active: boolean }): React.ReactElement {
   const [providers, setProviders] = useState<ProviderRow[]>([]);
   const [selected, setSelected] = useState(0);
-  const [mode, setMode] = useState<"list" | "form">("list");
+  const [mode, setMode] = useState<"list" | "form" | "embed-picker">("list");
   const [fieldIndex, setFieldIndex] = useState(0);
   const [form, setForm] = useState({
     nameIdx: 0,
@@ -36,6 +76,18 @@ export function Providers({ active }: { active: boolean }): React.ReactElement {
   const [testResult, setTestResult] = useState<string | undefined>(undefined);
   const [testOk, setTestOk] = useState<boolean | undefined>(undefined);
   const [testing, setTesting] = useState(false);
+
+  // Embedding-model picker (ollama only): pick from a curated list of known
+  // embedding models and pull it with a live streamed progress bar, rather
+  // than requiring the user to know an exact model name and pull it out of
+  // band. Separate from OllamaProvider's own silent on-demand auto-pull
+  // (src/providers/ollama.ts) -- this is the proactive, user-driven path;
+  // that one is the safety net if a model gets configured without ever
+  // being pulled through here.
+  const [embedPickerIndex, setEmbedPickerIndex] = useState(0);
+  const [pulling, setPulling] = useState(false);
+  const [pullProgress, setPullProgress] = useState<OllamaPullProgress | undefined>(undefined);
+  const [pullError, setPullError] = useState<string | undefined>(undefined);
 
   async function refresh() {
     const prisma = getPrisma();
@@ -82,6 +134,22 @@ export function Providers({ active }: { active: boolean }): React.ReactElement {
         return;
       }
 
+      if (mode === "embed-picker") {
+        if (pulling) return; // let the pull finish before accepting more input
+        if (key.escape) {
+          setMode("list");
+          return;
+        }
+        if (key.upArrow) {
+          setEmbedPickerIndex((i) => Math.max(0, i - 1));
+        } else if (key.downArrow) {
+          setEmbedPickerIndex((i) => Math.min(KNOWN_OLLAMA_EMBEDDING_MODELS.length - 1, i + 1));
+        } else if (key.return) {
+          void pullAndSetEmbedding(KNOWN_OLLAMA_EMBEDDING_MODELS[embedPickerIndex].name);
+        }
+        return;
+      }
+
       // list mode
       if (key.upArrow) setSelected((i) => Math.max(0, i - 1));
       else if (key.downArrow) setSelected((i) => Math.min(providers.length - 1, i + 1));
@@ -95,10 +163,38 @@ export function Providers({ active }: { active: boolean }): React.ReactElement {
         void remove(providers[selected].id);
       } else if (input === "t" && providers[selected]) {
         void test(providers[selected]);
+      } else if (input === "e" && providers[selected]?.name === "ollama") {
+        setEmbedPickerIndex(0);
+        setPullProgress(undefined);
+        setPullError(undefined);
+        setMode("embed-picker");
       }
     },
     { isActive: active }
   );
+
+  async function pullAndSetEmbedding(modelName: string): Promise<void> {
+    const row = providers[selected];
+    if (!row) return;
+    setPulling(true);
+    setPullError(undefined);
+    setPullProgress(undefined);
+    try {
+      const baseUrl = row.baseUrl ?? DEFAULT_OLLAMA_BASE_URL;
+      await pullOllamaModel(modelName, baseUrl, setPullProgress);
+      const prisma = getPrisma();
+      await prisma.providerConfig.update({
+        where: { id: row.id },
+        data: { embeddingModel: modelName },
+      });
+      await refresh();
+      setMode("list");
+    } catch (err) {
+      setPullError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setPulling(false);
+    }
+  }
 
   async function saveForm() {
     const prisma = getPrisma();
@@ -156,6 +252,56 @@ export function Providers({ active }: { active: boolean }): React.ReactElement {
     } finally {
       setTesting(false);
     }
+  }
+
+  if (mode === "embed-picker") {
+    const row = providers[selected];
+    return (
+      <Box flexDirection="column">
+        <Text bold color={colors.text}>
+          {icons.plug} Pull Embedding Model {row ? `for ${row.name}` : ""}
+        </Text>
+        <Text dimColor>Used for RAG document/query embedding -- not the chat model.</Text>
+        <Box marginTop={1} flexDirection="column" gap={1}>
+          {KNOWN_OLLAMA_EMBEDDING_MODELS.map((m, i) => {
+            const isSel = i === embedPickerIndex;
+            const isCurrent = row?.embeddingModel === m.name;
+            return (
+              <Box key={m.name} flexDirection="column">
+                <Text bold={isSel} color={isSel ? colors.accent : colors.text}>
+                  {isSel ? icons.arrowRight : " "} {m.name}
+                  {isCurrent ? " (current)" : ""}
+                </Text>
+                <Text color={colors.textDim}>  {m.description}</Text>
+              </Box>
+            );
+          })}
+        </Box>
+        {pulling && pullProgress && (
+          <Box marginTop={1}>
+            <PullProgressBar progress={pullProgress} />
+          </Box>
+        )}
+        {pulling && !pullProgress && (
+          <Box marginTop={1} flexDirection="row" gap={1}>
+            <PullSpinner />
+            <Text color={colors.textDim}>Starting pull...</Text>
+          </Box>
+        )}
+        {pullError && !pulling && (
+          <Box marginTop={1}>
+            <Text color={colors.error}>
+              {icons.cross} {pullError}
+            </Text>
+          </Box>
+        )}
+        <Box marginTop={1}>
+          <Text dimColor>
+            {pulling ? "Pulling -- please wait..." : "↑/↓ select · ↵ pull & set as embedding model · Esc cancel"}
+          </Text>
+        </Box>
+      </Box>
+    );
   }
 
   if (mode === "form") {
@@ -255,7 +401,10 @@ export function Providers({ active }: { active: boolean }): React.ReactElement {
         </Box>
       )}
       <Box marginTop={1}>
-        <Text dimColor>n new · a activate · d delete · t test connection</Text>
+        <Text dimColor>
+          n new · a activate · d delete · t test connection
+          {providers[selected]?.name === "ollama" ? " · e pull embedding model" : ""}
+        </Text>
       </Box>
     </Box>
   );
