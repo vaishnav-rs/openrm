@@ -41,18 +41,22 @@ export function TextArea({ value, onChange, active, height = 15, bare = false }:
 
   if (bare) {
     return (
-      <Box flexDirection="column" height={height}>
+      <Box flexDirection="column" height={height} overflow="hidden">
         {visibleLines.map((line, i) => (
-          <Text key={i}>{line || " "}</Text>
+          <Text key={i} wrap="truncate-end">
+            {line || " "}
+          </Text>
         ))}
       </Box>
     );
   }
 
   return (
-    <Box flexDirection="column" borderStyle="single" paddingX={1} height={height + 2}>
+    <Box flexDirection="column" borderStyle="single" paddingX={1} height={height + 2} overflow="hidden">
       {visibleLines.map((line, i) => (
-        <Text key={i}>{line || " "}</Text>
+        <Text key={i} wrap="truncate-end">
+          {line || " "}
+        </Text>
       ))}
     </Box>
   );
