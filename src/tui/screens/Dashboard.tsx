@@ -3,6 +3,7 @@ import { Box, Text } from "ink";
 import { getPrisma } from "../../db/prisma.js";
 import { eventBus, type MessageInEvent, type MessageOutEvent, type WaStatus } from "../events.js";
 import { colors, icons, sparkline, waStatusColor, waStatusLabel } from "../theme.js";
+import { scaledInterval } from "../terminal-env.js";
 
 const BUCKETS = 24; // last 24 hours
 
@@ -72,7 +73,7 @@ export function Dashboard(): React.ReactElement {
       }
     }
     void loadStats();
-    const interval = setInterval(loadStats, 5000);
+    const interval = setInterval(loadStats, scaledInterval(5000));
 
     return () => {
       cancelled = true;

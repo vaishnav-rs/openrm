@@ -3,6 +3,7 @@ import { Box, Text } from "ink";
 import { eventBus, type WaStatus } from "../events.js";
 import { renderQrToString } from "../qr.js";
 import { colors, icons, waStatusColor, waStatusLabel } from "../theme.js";
+import { scaledInterval } from "../terminal-env.js";
 
 // Rows of chrome that are NOT the QR block itself, on this screen, given
 // the current JSX below: title, status line (+ its marginTop), the margin
@@ -32,7 +33,7 @@ const SPINNER_INTERVAL_MS = 150;
 function Spinner({ color }: { color: string }): React.ReactElement {
   const [frame, setFrame] = useState(0);
   useEffect(() => {
-    const id = setInterval(() => setFrame((f) => (f + 1) % icons.spinner.length), SPINNER_INTERVAL_MS);
+    const id = setInterval(() => setFrame((f) => (f + 1) % icons.spinner.length), scaledInterval(SPINNER_INTERVAL_MS));
     return () => clearInterval(id);
   }, []);
   return <Text color={color}>{icons.spinner[frame]}</Text>;

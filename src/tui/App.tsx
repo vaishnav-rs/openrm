@@ -12,6 +12,7 @@ import { McpServers } from "./screens/McpServers.js";
 import { eventBus, type WaStatus } from "./events.js";
 import { colors, icons, layout, waStatusColor, waStatusLabel } from "./theme.js";
 import { getPrisma } from "../db/prisma.js";
+import { scaledInterval } from "./terminal-env.js";
 
 interface NavItem {
   key: string;
@@ -105,26 +106,47 @@ interface ProviderInfo {
   model: string;
 }
 
-function useClock(): string {
+// --- Isolated header leaf components -----------------------------------
+//
+// Each of these owns its own timer and its own local state, instead of
+// living in App's top-level state (which is how an earlier version worked).
+// That mattered for the flicker: when timer-driven state lived in App
+// itself, every clock tick / pulse blink / stats poll re-rendered the
+// *entire* App function component -- nav column, the whole active screen,
+// everything -- even though only a few characters in the header actually
+// changed. React only re-renders a component (and its subtree) when *its
+// own* state changes, not its parent's, so isolating each ticking value
+// into its own leaf component means a clock tick now only re-renders the
+// Clock component, not the nav or whatever screen (Contacts table, RAG
+// document list, an open editor, ...) happens to be open. This is
+// independent of, and in addition to, the earlier fix for Ink's
+// full-clear-vs-incremental-diff repaint path -- fewer/smaller re-renders
+// means less work even on the cheap incremental path, which matters a lot
+// on slower hosts (see terminal-env.ts).
+
+function Clock(): React.ReactElement {
   const [now, setNow] = useState(() => new Date());
   useEffect(() => {
-    const id = setInterval(() => setNow(new Date()), 1000);
+    const id = setInterval(() => setNow(new Date()), scaledInterval(1000));
     return () => clearInterval(id);
   }, []);
-  return now.toLocaleTimeString();
+  return <Text color={colors.muted}>{now.toLocaleTimeString()}</Text>;
 }
 
-function usePulse(active: boolean): boolean {
+function PulseDot({ waStatus }: { waStatus: WaStatus }): React.ReactElement {
+  const blinking = waStatus === "connecting" || waStatus === "qr";
   const [on, setOn] = useState(true);
   useEffect(() => {
-    if (!active) return;
-    const id = setInterval(() => setOn((v) => !v), 500);
+    if (!blinking) return;
+    const id = setInterval(() => setOn((v) => !v), scaledInterval(500));
     return () => clearInterval(id);
-  }, [active]);
-  return active ? on : true;
+  }, [blinking]);
+  const statusDotColor = waStatusColor[waStatus] ?? colors.muted;
+  const showDot = blinking ? on : true;
+  return <Text color={showDot ? statusDotColor : colors.mutedDim}>{icons.dotFilled}</Text>;
 }
 
-function useStats() {
+function StatsBar(): React.ReactElement {
   const [contactCount, setContactCount] = useState<number | undefined>(undefined);
   const [messagesToday, setMessagesToday] = useState<number | undefined>(undefined);
   const [provider, setProvider] = useState<ProviderInfo | undefined>(undefined);
@@ -151,14 +173,27 @@ function useStats() {
       }
     }
     void load();
-    const id = setInterval(load, 4000);
+    const id = setInterval(load, scaledInterval(4000));
     return () => {
       cancelled = true;
       clearInterval(id);
     };
   }, []);
 
-  return { contactCount, messagesToday, provider };
+  return (
+    <Box flexDirection="row" gap={1}>
+      <Text color={colors.textDim}>
+        {icons.gear} {provider ? `${provider.name}:${provider.model}` : "no provider"}
+      </Text>
+      <Text dimColor>│</Text>
+      <Text color={colors.textDim}>
+        {icons.contact} {contactCount ?? "…"}
+      </Text>
+      <Text color={colors.textDim}>
+        {icons.msg} {messagesToday ?? "…"} today
+      </Text>
+    </Box>
+  );
 }
 
 export function App(): React.ReactElement {
@@ -166,9 +201,6 @@ export function App(): React.ReactElement {
   const [focus, setFocus] = useState<"nav" | "screen">("nav");
   const [waStatus, setWaStatus] = useState<WaStatus>("idle");
   const active: ScreenKey = FLAT_ITEMS[selectedIndex].key;
-  const clock = useClock();
-  const { contactCount, messagesToday, provider } = useStats();
-  const pulseOn = usePulse(waStatus === "connecting" || waStatus === "qr");
 
   useEffect(() => {
     const onStatus = ({ status }: { status: WaStatus }) => setWaStatus(status);
@@ -279,9 +311,6 @@ export function App(): React.ReactElement {
   const { stdout } = useStdout();
   const rows = Math.max(1, (stdout.rows ?? 32) - 1);
 
-  const statusDotColor = waStatusColor[waStatus] ?? colors.muted;
-  const showDot = waStatus === "connecting" || waStatus === "qr" ? pulseOn : true;
-
   return (
     <Box flexDirection="column" height={rows}>
       {/* Top status bar */}
@@ -298,22 +327,13 @@ export function App(): React.ReactElement {
             {icons.bolt} {icons.wordmark}
           </Text>
           <Text dimColor>│</Text>
-          <Text color={showDot ? statusDotColor : colors.mutedDim}>{icons.dotFilled}</Text>
+          <PulseDot waStatus={waStatus} />
           <Text color={colors.textDim}>{waStatusLabel[waStatus] ?? waStatus}</Text>
         </Box>
         <Box flexDirection="row" gap={1}>
-          <Text color={colors.textDim}>
-            {icons.gear} {provider ? `${provider.name}:${provider.model}` : "no provider"}
-          </Text>
+          <StatsBar />
           <Text dimColor>│</Text>
-          <Text color={colors.textDim}>
-            {icons.contact} {contactCount ?? "…"}
-          </Text>
-          <Text color={colors.textDim}>
-            {icons.msg} {messagesToday ?? "…"} today
-          </Text>
-          <Text dimColor>│</Text>
-          <Text color={colors.muted}>{clock}</Text>
+          <Clock />
         </Box>
       </Box>
 
