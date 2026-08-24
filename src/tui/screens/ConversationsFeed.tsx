@@ -437,12 +437,26 @@ function ComposeBox({
     if (!value.trim() || sending) return;
     setSending(true);
     setError(undefined);
-    const result = await sendManualMessage({ conversationId, phone, text: value });
-    setSending(false);
-    if (result.sent) {
-      setText("");
-    } else {
-      setError(result.error ?? "Failed to send.");
+    try {
+      const result = await sendManualMessage({ conversationId, phone, text: value });
+      if (result.sent) {
+        setText("");
+        // sendManualMessage can report sent:true with an error attached --
+        // the WhatsApp send itself succeeded but saving it to the dashboard
+        // afterward failed. Still surface that, just don't treat it as a
+        // failed send (the customer did receive it).
+        if (result.error) setError(result.error);
+      } else {
+        setError(result.error ?? "Failed to send.");
+      }
+    } catch (err) {
+      // Defensive: sendManualMessage is designed to never throw (it catches
+      // internally and returns {sent, error}), but if it somehow does
+      // anyway, this must still resolve to a visible error rather than
+      // leaving `sending` stuck true forever with nothing on screen.
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setSending(false);
     }
   }
 

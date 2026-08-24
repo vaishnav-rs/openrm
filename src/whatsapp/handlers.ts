@@ -194,17 +194,36 @@ export async function sendManualMessage(params: {
     return { sent: false, error: err instanceof Error ? err.message : String(err) };
   }
 
-  const prisma = getPrisma();
-  await prisma.message.create({
-    data: { conversationId: params.conversationId, role: "human", content: trimmed },
-  });
-
-  eventBus.emitTyped("message:out", {
-    jid,
-    phone: params.phone,
-    text: trimmed,
-    at: new Date().toISOString(),
-  });
+  // The WhatsApp send above already succeeded -- the message is delivered
+  // regardless of what happens below. If persisting it or notifying the TUI
+  // throws (bad conversationId, a transient DB hiccup), that must NOT turn
+  // into an uncaught rejection: this function's only caller
+  // (ComposeBox.handleSubmit in ConversationsFeed.tsx) awaits this promise
+  // and only knows how to render a `{sent, error}` result, not catch a
+  // throw. An uncaught rejection here would leave that screen's "Sending..."
+  // spinner stuck forever with no visible error at all -- indistinguishable
+  // from the send silently doing nothing, from the operator's perspective.
+  try {
+    const prisma = getPrisma();
+    await prisma.message.create({
+      data: { conversationId: params.conversationId, role: "human", content: trimmed },
+    });
+    eventBus.emitTyped("message:out", {
+      jid,
+      phone: params.phone,
+      text: trimmed,
+      at: new Date().toISOString(),
+    });
+  } catch (err) {
+    // Still report success -- the customer DID receive the message -- but
+    // flag that it may not show up in the dashboard's own history/live feed.
+    return {
+      sent: true,
+      error:
+        "Message was delivered, but saving it to the dashboard failed: " +
+        (err instanceof Error ? err.message : String(err)),
+    };
+  }
 
   return { sent: true };
 }
