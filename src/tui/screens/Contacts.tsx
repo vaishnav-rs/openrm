@@ -2,6 +2,9 @@ import React, { useEffect, useState } from "react";
 import { Box, Text, useInput } from "ink";
 import { getPrisma } from "../../db/prisma.js";
 import { colors, icons, padCol } from "../theme.js";
+import { scaledInterval } from "../terminal-env.js";
+
+const CONTACTS_POLL_MS = 4000;
 
 interface ContactRow {
   id: string;
@@ -23,18 +26,26 @@ export function Contacts({ active }: { active: boolean }): React.ReactElement {
   const [drilledIn, setDrilledIn] = useState(false);
   const [detail, setDetail] = useState<ConversationDetail | undefined>(undefined);
   const [loading, setLoading] = useState(true);
+  const [mode, setMode] = useState<"list" | "confirm-delete">("list");
+
+  async function refresh() {
+    const prisma = getPrisma();
+    const rows = await prisma.contact.findMany({
+      include: { interests: true },
+      orderBy: { updatedAt: "desc" },
+      take: 50,
+    });
+    setContacts(rows);
+    // Keep the cursor in range if the list shrank/reordered under it rather
+    // than resetting to the top on every background refresh.
+    setSelected((i) => Math.min(i, Math.max(0, rows.length - 1)));
+  }
 
   useEffect(() => {
     let cancelled = false;
     async function load() {
       try {
-        const prisma = getPrisma();
-        const rows = await prisma.contact.findMany({
-          include: { interests: true },
-          orderBy: { updatedAt: "desc" },
-          take: 50,
-        });
-        if (!cancelled) setContacts(rows);
+        await refresh();
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -45,11 +56,32 @@ export function Contacts({ active }: { active: boolean }): React.ReactElement {
     };
   }, []);
 
+  // Live-refresh: newly-created contacts (from live inbound messages) show
+  // up here without navigating away and back. refresh() clamps `selected`
+  // rather than resetting it, so browsing isn't jarring.
+  useEffect(() => {
+    const interval = setInterval(() => void refresh(), scaledInterval(CONTACTS_POLL_MS));
+    return () => clearInterval(interval);
+  }, []);
+
   useInput(
     (input, key) => {
       if (!active) return;
       if (drilledIn) {
         if (key.escape || input === "b") setDrilledIn(false);
+        return;
+      }
+      if (mode === "confirm-delete") {
+        if (input === "y" && contacts[selected]) {
+          void (async () => {
+            const prisma = getPrisma();
+            await prisma.contact.delete({ where: { id: contacts[selected].id } });
+            setMode("list");
+            await refresh();
+          })();
+        } else {
+          setMode("list");
+        }
         return;
       }
       if (key.upArrow) setSelected((i) => Math.max(0, i - 1));
@@ -59,6 +91,8 @@ export function Contacts({ active }: { active: boolean }): React.ReactElement {
           setDetail(d);
           setDrilledIn(true);
         });
+      } else if (input === "d" && contacts[selected]) {
+        setMode("confirm-delete");
       }
     },
     { isActive: active }
@@ -130,8 +164,16 @@ export function Contacts({ active }: { active: boolean }): React.ReactElement {
           );
         })}
       </Box>
+      {mode === "confirm-delete" && contacts[selected] && (
+        <Box marginTop={1}>
+          <Text color={colors.warning}>
+            Delete "{contacts[selected].name ?? contacts[selected].phone}" and all their
+            interests/conversations? y confirm, any other key to cancel.
+          </Text>
+        </Box>
+      )}
       <Box marginTop={1}>
-        <Text dimColor>↑/↓ select, ↵ view details</Text>
+        <Text dimColor>↑/↓ select, ↵ view details, d delete</Text>
       </Box>
     </Box>
   );

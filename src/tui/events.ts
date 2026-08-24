@@ -38,12 +38,26 @@ export interface AgentToolCallEvent {
   at: string;
 }
 
+/**
+ * Emitted by request_human_handoff's executor (src/agent/tools/handoff.ts)
+ * right after it flags a Conversation as needsHuman. Purely a "wake up and
+ * poll now" hint for the TUI (see ConversationsFeed.tsx) -- the DB row is
+ * always the source of truth, and the feed's own interval poll is what
+ * guarantees eventual correctness even if this event is missed.
+ */
+export interface ConversationEscalatedEvent {
+  conversationId: string;
+  phone: string;
+  at: string;
+}
+
 interface OpenrmEventMap {
   "message:in": [MessageInEvent];
   "message:out": [MessageOutEvent];
   "wa:status": [WaStatusEvent];
   "wa:qr": [WaQrEvent];
   "agent:tool-call": [AgentToolCallEvent];
+  "conversation:escalated": [ConversationEscalatedEvent];
 }
 
 /**

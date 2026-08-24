@@ -6,6 +6,9 @@ import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/
 import { getPrisma } from "../../db/prisma.js";
 import { TextInput } from "../TextInput.js";
 import { colors, icons } from "../theme.js";
+import { scaledInterval } from "../terminal-env.js";
+
+const MCP_POLL_MS = 4000;
 
 interface McpRow {
   id: string;
@@ -40,10 +43,18 @@ export function McpServers({ active }: { active: boolean }): React.ReactElement 
     const prisma = getPrisma();
     const rows = await prisma.mcpServer.findMany({ orderBy: { createdAt: "asc" } });
     setServers(rows);
+    setSelected((i) => Math.min(i, Math.max(0, rows.length - 1)));
   }
 
   useEffect(() => {
     void refresh();
+  }, []);
+
+  // Live-refresh so servers added/toggled elsewhere show up without
+  // navigating away and back.
+  useEffect(() => {
+    const interval = setInterval(() => void refresh(), scaledInterval(MCP_POLL_MS));
+    return () => clearInterval(interval);
   }, []);
 
   useInput(

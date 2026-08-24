@@ -4,6 +4,9 @@ import { getPrisma } from "../../db/prisma.js";
 import { instantiateProvider } from "../../providers/registry.js";
 import { TextInput } from "../TextInput.js";
 import { colors, icons } from "../theme.js";
+import { scaledInterval } from "../terminal-env.js";
+
+const PROVIDERS_POLL_MS = 4000;
 
 interface ProviderRow {
   id: string;
@@ -38,10 +41,19 @@ export function Providers({ active }: { active: boolean }): React.ReactElement {
     const prisma = getPrisma();
     const rows = await prisma.providerConfig.findMany({ orderBy: { createdAt: "asc" } });
     setProviders(rows);
+    setSelected((i) => Math.min(i, Math.max(0, rows.length - 1)));
   }
 
   useEffect(() => {
     void refresh();
+  }, []);
+
+  // Live-refresh so a provider change made from elsewhere (another openrm
+  // process, etc.) shows up here without navigating away and back. Only
+  // affects the list; form-mode drafting is untouched.
+  useEffect(() => {
+    const interval = setInterval(() => void refresh(), scaledInterval(PROVIDERS_POLL_MS));
+    return () => clearInterval(interval);
   }, []);
 
   useInput(

@@ -5,6 +5,7 @@ import type { ChatMessage, ToolDefinition } from "../providers/types.js";
 import { getSoulPath } from "../setup/paths.js";
 import { crmTools } from "./tools/crm.js";
 import { ragTools } from "./tools/rag.js";
+import { handoffTools } from "./tools/handoff.js";
 import { loadMcpTools } from "./mcp-client.js";
 import type { AgentTool, ToolContext } from "./tool-types.js";
 
@@ -28,6 +29,49 @@ async function loadMasterSystemPrompt(): Promise<string> {
   const prisma = getPrisma();
   const config = await prisma.agentConfig.findUnique({ where: { id: "1" } });
   return config?.masterSystemPrompt ?? "";
+}
+
+/**
+ * Builds the always-present "GROUNDING POLICY" block that's appended to
+ * every system prompt (see handleInbound below), instructing the model to
+ * base ANY factual claim about the business on retrieve_knowledge results
+ * rather than general model knowledge -- not just "what company is this"
+ * but pricing, hours, policies, people, everything specific to this
+ * business. This is fundamentally a prompt-engineering mitigation, not a
+ * hard guarantee: tool calls can't be mechanically forced across every
+ * provider/model this app supports (Ollama/OpenAI/Anthropic/OpenAI-compat
+ * all differ in how strongly they honor "must call a tool"), so this raises
+ * compliance but cannot guarantee it for 100% of replies. That's expected
+ * and acceptable -- it's the best available lever short of provider-specific
+ * forced tool-choice, which would break the provider-agnostic abstraction.
+ *
+ * Queried fresh (one cheap Document count) on every handleInbound call --
+ * same "re-resolve per message" pattern already used for the active
+ * provider -- so newly-ingested (or newly-emptied) knowledge bases are
+ * reflected on the very next reply with no caching to invalidate.
+ */
+async function buildGroundingPolicy(): Promise<string> {
+  const prisma = getPrisma();
+  const documentCount = await prisma.document.count();
+
+  if (documentCount === 0) {
+    return (
+      "GROUNDING POLICY: No knowledge base documents are loaded yet. If the " +
+      "customer asks something specific to this business (products, services, " +
+      "pricing, policies, hours, people, etc.), say plainly that you don't have " +
+      "that information yet rather than guessing or inventing an answer."
+    );
+  }
+
+  return (
+    "GROUNDING POLICY: You MUST base ALL factual claims about this business -- " +
+    "its products, services, pricing, policies, hours, people, or anything else " +
+    "specific to this business -- on content retrieved via the retrieve_knowledge " +
+    "tool, not on general knowledge or assumption. Call retrieve_knowledge before " +
+    "answering any business-specific question you are not already certain of from " +
+    "this conversation. If retrieve_knowledge returns nothing relevant, say you " +
+    "don't have that information rather than guessing."
+  );
 }
 
 async function getOrCreateConversation(contactId: string) {
@@ -68,7 +112,8 @@ export async function handleInbound(jid: string, text: string): Promise<string> 
 
   const soul = loadSoul();
   const masterSystemPrompt = await loadMasterSystemPrompt();
-  const systemPrompt = [soul, masterSystemPrompt].filter(Boolean).join("\n\n");
+  const groundingPolicy = await buildGroundingPolicy();
+  const systemPrompt = [soul, masterSystemPrompt, groundingPolicy].filter(Boolean).join("\n\n");
 
   const history = await prisma.message.findMany({
     where: { conversationId: conversation.id },
@@ -88,7 +133,7 @@ export async function handleInbound(jid: string, text: string): Promise<string> 
   ];
 
   const mcpTools = await loadMcpTools();
-  const allTools: AgentTool[] = [...crmTools, ...ragTools, ...mcpTools];
+  const allTools: AgentTool[] = [...crmTools, ...ragTools, ...handoffTools, ...mcpTools];
   const toolByName = new Map(allTools.map((t) => [t.definition.name, t]));
   const toolDefs: ToolDefinition[] = allTools.map((t) => t.definition);
 

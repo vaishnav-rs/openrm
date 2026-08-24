@@ -3,6 +3,9 @@ import { Box, Text, useInput } from "ink";
 import { deleteDocument, ingestFile, listDocuments } from "../../rag/ingest.js";
 import { TextInput } from "../TextInput.js";
 import { colors, icons, padCol } from "../theme.js";
+import { scaledInterval } from "../terminal-env.js";
+
+const RAG_POLL_MS = 4000;
 
 interface DocRow {
   id: string;
@@ -24,10 +27,18 @@ export function RagDocuments({ active }: { active: boolean }): React.ReactElemen
   async function refresh() {
     const rows = await listDocuments();
     setDocs(rows);
+    setSelected((i) => Math.min(i, Math.max(0, rows.length - 1)));
   }
 
   useEffect(() => {
     void refresh();
+  }, []);
+
+  // Live-refresh so document/chunk counts update if ingestion happens from
+  // another path while this screen is open.
+  useEffect(() => {
+    const interval = setInterval(() => void refresh(), scaledInterval(RAG_POLL_MS));
+    return () => clearInterval(interval);
   }, []);
 
   useInput(

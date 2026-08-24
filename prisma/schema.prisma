@@ -52,11 +52,16 @@ model Interest {
 }
 
 model Conversation {
-  id        String    @id @default(cuid())
-  contactId String
-  contact   Contact   @relation(fields: [contactId], references: [id], onDelete: Cascade)
-  createdAt DateTime  @default(now())
-  messages  Message[]
+  id          String    @id @default(cuid())
+  contactId   String
+  contact     Contact   @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  createdAt   DateTime  @default(now())
+  messages    Message[]
+  // Set true by the request_human_handoff agent tool (src/agent/tools/handoff.ts)
+  // when the customer explicitly asks for a human, or as a genuine last resort.
+  // Never set proactively -- see that tool's description for the exact policy.
+  needsHuman  Boolean   @default(false)
+  escalatedAt DateTime?
 
   @@index([contactId])
 }
@@ -86,8 +91,14 @@ model ProviderConfig {
 
 // Singleton row, conventionally id = "1".
 model AgentConfig {
-  id                 String @id @default("1")
-  masterSystemPrompt String @db.Text
+  id                 String  @id @default("1")
+  masterSystemPrompt String  @db.Text
+  // Dedicated internal staff WhatsApp number (bare digits, no @s.whatsapp.net
+  // suffix) notified by request_human_handoff. Optional: if unset, the
+  // handoff tool still flags the conversation for the dashboard but skips
+  // sending a WhatsApp notification. Configured from the "System Prompt"
+  // TUI screen (src/tui/screens/SystemPrompt.tsx).
+  escalationPhone    String?
 }
 
 model McpServer {

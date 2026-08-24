@@ -15,8 +15,12 @@ const retrieveKnowledge: AgentTool = {
     name: "retrieve_knowledge",
     description:
       "Search the business's ingested knowledge base (uploaded docs) for passages " +
-      "relevant to a query. Use this when the customer asks something specific about " +
-      "products, services, pricing, or policies that you're not certain about.",
+      "relevant to a query. You MUST call this before making ANY factual claim about " +
+      "this business -- its products, services, pricing, policies, hours, people, " +
+      "locations, or anything else specific to this business. Never answer a " +
+      "business-specific question from general knowledge or assumption: always check " +
+      "the knowledge base first with this tool, and if it returns nothing relevant, " +
+      "say plainly that you don't have that information rather than guessing.",
     parameters: {
       type: "object",
       properties: {

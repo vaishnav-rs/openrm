@@ -12,16 +12,37 @@ into Postgres.
 **openrm only ever replies to an inbound WhatsApp message from a contact who
 messaged it first.** There is no scheduler, cron job, queue-drainer, or
 broadcast path anywhere in this codebase. The *entire* codebase has exactly
-one call to `sock.sendMessage(...)` (the Baileys "send" API), and it lives in
-[`src/whatsapp/handlers.ts`](./src/whatsapp/handlers.ts), directly inside the
-`messages.upsert` handler, sending only to the JID that triggered it. You can
-verify this yourself:
+two calls to `sock.sendMessage(...)` (the Baileys "send" API), and both live
+in [`src/whatsapp/handlers.ts`](./src/whatsapp/handlers.ts) so the guarantee
+below stays auditable from one file:
 
 ```sh
 grep -rn "sendMessage" src/
 ```
 
-You should find exactly one functional call site.
+You should find exactly two functional call sites:
+
+1. **The reactive customer reply** -- directly inside the `messages.upsert`
+   handler, sending only to the JID that triggered it. Unchanged since the
+   very first version of this app.
+2. **Human handoff staff alert** (`notifyStaffOfEscalation`) -- a narrow,
+   deliberate exception, not a violation of the guarantee above. When the
+   agent's `request_human_handoff` tool
+   ([`src/agent/tools/handoff.ts`](./src/agent/tools/handoff.ts)) decides a
+   conversation needs a human -- which only happens when the customer
+   *explicitly* asks to speak to a person, or the agent has genuinely
+   exhausted its ability to help -- it flags the conversation
+   (`Conversation.needsHuman`) and, if a dedicated staff number is
+   configured (`AgentConfig.escalationPhone`, editable from the "System
+   Prompt" dashboard screen), sends that one pre-configured internal number
+   a short WhatsApp alert with the customer's info and a reason. This still
+   fires **only** as a direct, synchronous consequence of a real inbound
+   customer message (there is no timer/queue path to it), and it **never**
+   messages a customer or any new/discovered external party -- only the
+   single fixed internal staff number the business itself configured. The
+   dashboard's "Conversations" screen surfaces flagged conversations so
+   staff can see them and take over from their own WhatsApp app; openrm
+   itself never sends anything further on that conversation once flagged.
 
 ## Install
 
@@ -130,7 +151,9 @@ before ingesting any documents, then re-run migrations.
 
 - **Dashboard** -- connection status, contact/message counts.
 - **Pairing** -- live QR code + connection state.
-- **Conversations** -- live inbound/outbound message stream.
+- **Conversations** -- recent message history plus a live inbound/outbound
+  stream, and a "Needs Human" panel listing conversations flagged by
+  `request_human_handoff` for staff to pick up on their own WhatsApp.
 - **Contacts** -- browse contacts, drill into interests + history.
 - **Providers** -- add/activate/test LLM providers.
 - **Soul** -- edit `~/.openrm/soul.md` directly.
