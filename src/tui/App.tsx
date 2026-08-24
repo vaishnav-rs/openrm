@@ -10,7 +10,7 @@ import { SystemPrompt } from "./screens/SystemPrompt.js";
 import { RagDocuments } from "./screens/RagDocuments.js";
 import { McpServers } from "./screens/McpServers.js";
 import { eventBus, type WaStatus } from "./events.js";
-import { colors, icons, layout, waStatusColor, waStatusLabel } from "./theme.js";
+import { colors, hyperlink, icons, layout, waStatusColor, waStatusLabel } from "./theme.js";
 import { getPrisma } from "../db/prisma.js";
 import { scaledInterval } from "./terminal-env.js";
 
@@ -56,6 +56,9 @@ const NAV_GROUPS: NavGroup[] = [
 
 const FLAT_ITEMS: NavItem[] = NAV_GROUPS.flatMap((g) => g.items);
 type ScreenKey = string;
+
+const HAB8_URL = "https://hab8.in";
+const HAB8_LABEL = "Built by Hab8 Technologies";
 
 // --- Mouse support (nav column only) ---------------------------------
 //
@@ -392,6 +395,21 @@ export function App(): React.ReactElement {
         </Text>
         <Text color={colors.mutedDim}>
           openrm never initiates WhatsApp messages -- reactive only
+        </Text>
+      </Box>
+
+      {/*
+        Persistent branding footer. Uses an OSC 8 terminal hyperlink (see
+        theme.ts's hyperlink()) rather than our own mouse-click handling --
+        that keeps this fully independent of the nav-only SGR mouse mode
+        above (which is deliberately disabled outside the nav column to
+        protect text-editing screens), and lets the terminal itself handle
+        the click, with graceful degradation to plain text where OSC 8
+        isn't supported.
+      */}
+      <Box paddingX={1} justifyContent="center" flexShrink={0}>
+        <Text color={colors.accent} underline>
+          {hyperlink(HAB8_URL, HAB8_LABEL)}
         </Text>
       </Box>
     </Box>

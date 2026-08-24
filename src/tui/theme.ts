@@ -100,3 +100,18 @@ export function padCol(value: string, width: number): string {
   const v = value.length > width ? value.slice(0, Math.max(0, width - 1)) + "…" : value;
   return v.padEnd(width, " ");
 }
+
+/**
+ * Wraps `label` in an OSC 8 terminal hyperlink escape sequence pointing at
+ * `url`. This is a passive text decoration the terminal itself interprets
+ * (Windows Terminal, iTerm2, most modern emulators support it) -- clicking
+ * the rendered text opens the URL directly, with no mouse-event parsing or
+ * click handling required on our end. On terminals without OSC 8 support
+ * (notably legacy conhost-based PowerShell/cmd) it degrades gracefully to
+ * plain, non-clickable text -- the escape bytes are either ignored or, in
+ * the worst case on a truly ancient terminal, invisible/no-ops, never
+ * garbled visible characters.
+ */
+export function hyperlink(url: string, label: string): string {
+  return `\x1b]8;;${url}\x1b\\${label}\x1b]8;;\x1b\\`;
+}
