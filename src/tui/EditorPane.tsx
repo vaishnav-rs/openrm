@@ -1,6 +1,6 @@
-import React from "react";
+import React, { useCallback, useState } from "react";
 import { Box, Text } from "ink";
-import { TextArea } from "./TextArea.js";
+import { TextArea, computeScrollTop } from "./TextArea.js";
 import { colors, icons } from "./theme.js";
 
 interface EditorPaneProps {
@@ -17,7 +17,21 @@ interface EditorPaneProps {
 /**
  * Framed "editor" chrome shared by Soul and SystemPrompt: title bar,
  * line-numbered gutter, unsaved-changes indicator, and a save-confirmation
- * flash line. Wraps the existing TextArea (unchanged input semantics).
+ * flash line. Wraps TextArea, which owns the cursor/selection and does the
+ * actual key handling.
+ *
+ * The gutter and TextArea's text rows used to each independently slice
+ * `lines` to figure out what's "visible" (`lines.slice(-height)`), which
+ * was fine when the editor was append-only (the tail was always what you
+ * wanted) but broke once the cursor could move into earlier content -- two
+ * independent windowing computations are exactly how this repo previously
+ * got a gutter/text desync bug on wrapped lines. To avoid repeating that,
+ * `scrollTop` (the first visible line index) is owned here, computed via
+ * the *same* `computeScrollTop` helper TextArea itself uses, fed by
+ * TextArea's `onCursorLineChange` callback, and then handed back down to
+ * TextArea as a controlled prop. Both the gutter below and TextArea's rows
+ * are therefore guaranteed -- by construction, not by coincidence -- to
+ * render the exact same window.
  */
 export function EditorPane({
   title,
@@ -29,9 +43,18 @@ export function EditorPane({
   dirty,
   status,
 }: EditorPaneProps): React.ReactElement {
+  const [scrollTop, setScrollTop] = useState(0);
+
+  const handleCursorLineChange = useCallback(
+    (cursorLine: number, totalLines: number) => {
+      setScrollTop((prev) => computeScrollTop(prev, cursorLine, height, totalLines));
+    },
+    [height]
+  );
+
   const lines = value.split("\n");
-  const visible = lines.slice(-height);
-  const startLineNo = lines.length - visible.length + 1;
+  const visibleCount = Math.min(height, Math.max(0, lines.length - scrollTop));
+  const startLineNo = scrollTop + 1;
   const gutterWidth = String(lines.length).length + 1;
 
   return (
@@ -46,14 +69,22 @@ export function EditorPane({
 
       <Box marginTop={1} borderStyle="round" borderColor={active ? colors.borderFocus : colors.border}>
         <Box flexDirection="column" paddingX={1} borderStyle="single" borderColor={colors.border} borderTop={false} borderBottom={false} borderRight={true} borderLeft={false}>
-          {visible.map((_, i) => (
+          {Array.from({ length: visibleCount }, (_, i) => (
             <Text key={i} color={colors.mutedDim}>
               {String(startLineNo + i).padStart(gutterWidth, " ")}
             </Text>
           ))}
         </Box>
         <Box flexDirection="column" paddingX={1} flexGrow={1}>
-          <RawEditorLines value={value} onChange={onChange} active={active} height={height} />
+          <TextArea
+            value={value}
+            onChange={onChange}
+            active={active}
+            height={height}
+            bare
+            scrollTop={scrollTop}
+            onCursorLineChange={handleCursorLineChange}
+          />
         </Box>
       </Box>
 
@@ -64,19 +95,4 @@ export function EditorPane({
       </Box>
     </Box>
   );
-}
-
-/** Thin wrapper so we keep using TextArea's exact input handling, just unstyled (no border) for embedding in EditorPane's frame. */
-function RawEditorLines({
-  value,
-  onChange,
-  active,
-  height,
-}: {
-  value: string;
-  onChange: (v: string) => void;
-  active: boolean;
-  height: number;
-}): React.ReactElement {
-  return <TextArea value={value} onChange={onChange} active={active} height={height} bare />;
 }
