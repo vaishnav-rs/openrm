@@ -1,17 +1,21 @@
 import React, { useEffect, useState } from "react";
 import { Box, Text, useInput } from "ink";
 import { getPrisma } from "../../db/prisma.js";
+import { colors, icons, padCol } from "../theme.js";
 
 interface ContactRow {
   id: string;
   phone: string;
   name: string | null;
+  updatedAt: Date;
   interests: { label: string; notes: string | null }[];
 }
 
 interface ConversationDetail {
   messages: { role: string; content: string; createdAt: Date }[];
 }
+
+const COL = { name: 20, phone: 16, interests: 10, lastSeen: 16 };
 
 export function Contacts({ active }: { active: boolean }): React.ReactElement {
   const [contacts, setContacts] = useState<ContactRow[]>([]);
@@ -76,29 +80,30 @@ export function Contacts({ active }: { active: boolean }): React.ReactElement {
     const contact = contacts[selected];
     return (
       <Box flexDirection="column">
-        <Text bold>
-          {contact.name ?? "(no name)"} -- {contact.phone}
+        <Text bold color={colors.text}>
+          {icons.contact} {contact.name ?? "(no name)"} <Text color={colors.textDim}>-- {contact.phone}</Text>
         </Text>
-        <Box marginTop={1} flexDirection="column">
-          <Text bold>Interests</Text>
+        <Box marginTop={1} flexDirection="column" borderStyle="round" borderColor={colors.border} paddingX={1}>
+          <Text color={colors.mutedDim}>INTERESTS</Text>
           {contact.interests.length === 0 && <Text dimColor>None logged.</Text>}
           {contact.interests.map((i, idx) => (
-            <Text key={idx}>
-              - {i.label}
-              {i.notes ? ` (${i.notes})` : ""}
+            <Text key={idx} color={colors.accentAlt}>
+              {icons.bullet} {i.label}
+              {i.notes ? <Text color={colors.textDim}> ({i.notes})</Text> : null}
             </Text>
           ))}
         </Box>
-        <Box marginTop={1} flexDirection="column">
-          <Text bold>Recent conversation</Text>
+        <Box marginTop={1} flexDirection="column" borderStyle="round" borderColor={colors.border} paddingX={1} flexGrow={1}>
+          <Text color={colors.mutedDim}>RECENT CONVERSATION</Text>
+          {(detail?.messages ?? []).length === 0 && <Text dimColor>No messages recorded.</Text>}
           {(detail?.messages ?? []).map((m, idx) => (
-            <Text key={idx} dimColor={m.role !== "user"}>
-              [{m.role}] {m.content}
+            <Text key={idx} color={m.role === "user" ? colors.info : colors.textDim}>
+              {m.role === "user" ? icons.in : icons.out} [{m.role}] {m.content}
             </Text>
           ))}
         </Box>
         <Box marginTop={1}>
-          <Text dimColor>Esc/b to go back</Text>
+          <Text dimColor>esc/b back to list</Text>
         </Box>
       </Box>
     );
@@ -106,18 +111,27 @@ export function Contacts({ active }: { active: boolean }): React.ReactElement {
 
   return (
     <Box flexDirection="column">
-      <Text bold>Contacts</Text>
+      <Text bold color={colors.text}>
+        {icons.contact} Contacts
+      </Text>
       <Box marginTop={1} flexDirection="column">
+        <Text color={colors.mutedDim}>
+          {padCol("NAME", COL.name)} {padCol("PHONE", COL.phone)} {padCol("INTERESTS", COL.interests)} {padCol("LAST SEEN", COL.lastSeen)}
+        </Text>
         {contacts.length === 0 && <Text dimColor>No contacts yet.</Text>}
-        {contacts.map((c, i) => (
-          <Text key={c.id} color={active && i === selected ? "green" : undefined}>
-            {active && i === selected ? "> " : "  "}
-            {c.name ?? "(no name)"} -- {c.phone} ({c.interests.length} interests)
-          </Text>
-        ))}
+        {contacts.map((c, i) => {
+          const isSel = active && i === selected;
+          return (
+            <Text key={c.id} color={isSel ? colors.accent : colors.text} bold={isSel}>
+              {isSel ? icons.arrowRight : " "} {padCol(c.name ?? "(no name)", COL.name)}{" "}
+              {padCol(c.phone, COL.phone)} {padCol(String(c.interests.length), COL.interests)}{" "}
+              {padCol(c.updatedAt.toLocaleDateString(), COL.lastSeen)}
+            </Text>
+          );
+        })}
       </Box>
       <Box marginTop={1}>
-        <Text dimColor>↑/↓ select, Enter to view details</Text>
+        <Text dimColor>↑/↓ select, ↵ view details</Text>
       </Box>
     </Box>
   );

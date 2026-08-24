@@ -1,11 +1,11 @@
 import React, { useEffect, useState } from "react";
-import { Box, Text, useInput } from "ink";
+import { Box, useInput } from "ink";
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { join } from "node:path";
 import { getSoulPath, getOpenrmHome } from "../../setup/paths.js";
-import { TextArea } from "../TextArea.js";
+import { EditorPane } from "../EditorPane.js";
 
 function loadDefaultSoul(): string {
   const here = dirname(fileURLToPath(import.meta.url));
@@ -26,15 +26,14 @@ function loadDefaultSoul(): string {
  */
 export function Soul({ active }: { active: boolean }): React.ReactElement {
   const [content, setContent] = useState("");
+  const [savedContent, setSavedContent] = useState("");
   const [status, setStatus] = useState<string | undefined>(undefined);
 
   useEffect(() => {
     const path = getSoulPath();
-    if (existsSync(path)) {
-      setContent(readFileSync(path, "utf-8"));
-    } else {
-      setContent(loadDefaultSoul());
-    }
+    const initial = existsSync(path) ? readFileSync(path, "utf-8") : loadDefaultSoul();
+    setContent(initial);
+    setSavedContent(initial);
   }, []);
 
   useInput(
@@ -44,7 +43,8 @@ export function Soul({ active }: { active: boolean }): React.ReactElement {
         const home = getOpenrmHome();
         if (!existsSync(home)) mkdirSync(home, { recursive: true });
         writeFileSync(getSoulPath(), content, "utf-8");
-        setStatus(`Saved at ${new Date().toLocaleTimeString()}`);
+        setSavedContent(content);
+        setStatus(`saved at ${new Date().toLocaleTimeString()}`);
       }
     },
     { isActive: active }
@@ -52,13 +52,16 @@ export function Soul({ active }: { active: boolean }): React.ReactElement {
 
   return (
     <Box flexDirection="column">
-      <Text bold>Soul (persona &amp; behavior seed -- ~/.openrm/soul.md)</Text>
-      <Box marginTop={1}>
-        <TextArea value={content} onChange={setContent} active={active} height={16} />
-      </Box>
-      <Box marginTop={1}>
-        <Text dimColor>Ctrl+S to save{status ? ` -- ${status}` : ""}</Text>
-      </Box>
+      <EditorPane
+        title="Soul"
+        subtitle="Persona & behavior seed -- ~/.openrm/soul.md"
+        value={content}
+        onChange={setContent}
+        active={active}
+        height={16}
+        dirty={content !== savedContent}
+        status={status}
+      />
     </Box>
   );
 }

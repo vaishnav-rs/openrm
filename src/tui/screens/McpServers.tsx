@@ -5,6 +5,7 @@ import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { getPrisma } from "../../db/prisma.js";
 import { TextInput } from "../TextInput.js";
+import { colors, icons } from "../theme.js";
 
 interface McpRow {
   id: string;
@@ -32,6 +33,7 @@ export function McpServers({ active }: { active: boolean }): React.ReactElement 
     url: "",
   });
   const [testResult, setTestResult] = useState<string | undefined>(undefined);
+  const [testOk, setTestOk] = useState<boolean | undefined>(undefined);
   const [testing, setTesting] = useState(false);
 
   async function refresh() {
@@ -120,6 +122,7 @@ export function McpServers({ active }: { active: boolean }): React.ReactElement 
   async function test(row: McpRow) {
     setTesting(true);
     setTestResult(undefined);
+    setTestOk(undefined);
     try {
       const client = new Client({ name: "openrm", version: "0.1.0" }, { capabilities: {} });
       if (row.transport === "stdio") {
@@ -132,9 +135,11 @@ export function McpServers({ active }: { active: boolean }): React.ReactElement 
         await client.connect(transport);
       }
       const { tools } = await client.listTools();
-      setTestResult(`OK -- ${tools.length} tool(s): ${tools.map((t) => t.name).join(", ")}`);
+      setTestOk(true);
+      setTestResult(`${tools.length} tool(s): ${tools.map((t) => t.name).join(", ")}`);
     } catch (err) {
-      setTestResult(`FAILED: ${err instanceof Error ? err.message : String(err)}`);
+      setTestOk(false);
+      setTestResult(err instanceof Error ? err.message : String(err));
     } finally {
       setTesting(false);
     }
@@ -143,12 +148,14 @@ export function McpServers({ active }: { active: boolean }): React.ReactElement 
   if (mode === "form") {
     return (
       <Box flexDirection="column">
-        <Text bold>New MCP Server</Text>
+        <Text bold color={colors.text}>
+          {icons.server} New MCP Server
+        </Text>
         <Field label="Name" active={fieldIndex === 0}>
           <TextInput value={form.name} onChange={(v) => setForm((f) => ({ ...f, name: v }))} active={fieldIndex === 0} />
         </Field>
         <Field label="Transport (←/→)" active={fieldIndex === 1}>
-          <Text>{TRANSPORTS[form.transportIdx]}</Text>
+          <Text color={colors.accent}>{TRANSPORTS[form.transportIdx]}</Text>
         </Field>
         <Field label="Command" active={fieldIndex === 2}>
           <TextInput
@@ -175,7 +182,7 @@ export function McpServers({ active }: { active: boolean }): React.ReactElement 
           />
         </Field>
         <Box marginTop={1}>
-          <Text dimColor>Tab to move fields, Enter on last field to save, Esc to cancel</Text>
+          <Text dimColor>Tab move fields · ↵ on last field to save · Esc cancel</Text>
         </Box>
       </Box>
     );
@@ -183,21 +190,51 @@ export function McpServers({ active }: { active: boolean }): React.ReactElement 
 
   return (
     <Box flexDirection="column">
-      <Text bold>MCP Servers</Text>
-      <Box marginTop={1} flexDirection="column">
+      <Text bold color={colors.text}>
+        {icons.server} MCP Servers
+      </Text>
+      <Box marginTop={1} flexDirection="column" gap={1}>
         {servers.length === 0 && <Text dimColor>No MCP servers configured. Press "n" to add one.</Text>}
-        {servers.map((s, i) => (
-          <Text key={s.id} color={active && i === selected ? "green" : undefined}>
-            {active && i === selected ? "> " : "  "}
-            {s.enabled ? "[on] " : "[off] "}
-            {s.name} ({s.transport})
-          </Text>
-        ))}
+        {servers.map((s, i) => {
+          const isSel = active && i === selected;
+          return (
+            <Box
+              key={s.id}
+              flexDirection="column"
+              borderStyle="round"
+              borderColor={isSel ? colors.borderFocus : colors.border}
+              paddingX={1}
+            >
+              <Box justifyContent="space-between">
+                <Text bold={isSel} color={isSel ? colors.accent : colors.text}>
+                  {isSel ? icons.arrowRight : " "} {s.name}
+                </Text>
+                <Text color={s.enabled ? colors.success : colors.mutedDim}>
+                  {s.enabled ? `${icons.dotFilled} ENABLED` : `${icons.dotHollow} DISABLED`}
+                </Text>
+              </Box>
+              <Text color={colors.textDim}>
+                {s.transport === "stdio" ? "⌘ stdio" : "🌐 http"}
+                {s.transport === "stdio" ? ` -- ${s.command ?? "(no command)"}` : ` -- ${s.url ?? "(no url)"}`}
+              </Text>
+            </Box>
+          );
+        })}
       </Box>
-      {testing && <Text dimColor>Testing connection...</Text>}
-      {testResult && <Text>{testResult}</Text>}
+      {testing && (
+        <Box marginTop={1}>
+          <Text color={colors.warning}>{icons.spinner[0]} Testing connection...</Text>
+        </Box>
+      )}
+      {testResult && !testing && (
+        <Box marginTop={1}>
+          <Text color={testOk ? colors.success : colors.error}>
+            {testOk ? icons.check : icons.cross} {testResult}
+          </Text>
+        </Box>
+      )}
       <Box marginTop={1}>
-        <Text dimColor>n new, e toggle enabled, d delete, t test connection</Text>
+        <Text dimColor>n new · e toggle enabled · d delete · t test connection</Text>
       </Box>
     </Box>
   );
@@ -215,7 +252,7 @@ function Field({
   return (
     <Box>
       <Box width={20}>
-        <Text color={active ? "green" : undefined}>{label}:</Text>
+        <Text color={active ? colors.accent : colors.textDim}>{label}:</Text>
       </Box>
       {children}
     </Box>

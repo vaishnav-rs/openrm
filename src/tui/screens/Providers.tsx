@@ -3,6 +3,7 @@ import { Box, Text, useInput } from "ink";
 import { getPrisma } from "../../db/prisma.js";
 import { instantiateProvider } from "../../providers/registry.js";
 import { TextInput } from "../TextInput.js";
+import { colors, icons } from "../theme.js";
 
 interface ProviderRow {
   id: string;
@@ -30,6 +31,7 @@ export function Providers({ active }: { active: boolean }): React.ReactElement {
     embeddingModel: "",
   });
   const [testResult, setTestResult] = useState<string | undefined>(undefined);
+  const [testOk, setTestOk] = useState<boolean | undefined>(undefined);
   const [testing, setTesting] = useState(false);
 
   async function refresh() {
@@ -121,6 +123,7 @@ export function Providers({ active }: { active: boolean }): React.ReactElement {
   async function test(row: ProviderRow) {
     setTesting(true);
     setTestResult(undefined);
+    setTestOk(undefined);
     try {
       const provider = instantiateProvider({
         name: row.name,
@@ -133,9 +136,11 @@ export function Providers({ active }: { active: boolean }): React.ReactElement {
         [{ role: "user", content: "Reply with the single word OK." }],
         []
       );
-      setTestResult(`OK -- model responded: ${(result.content ?? "").slice(0, 80)}`);
+      setTestOk(true);
+      setTestResult(`model responded: ${(result.content ?? "").slice(0, 80)}`);
     } catch (err) {
-      setTestResult(`FAILED: ${err instanceof Error ? err.message : String(err)}`);
+      setTestOk(false);
+      setTestResult(err instanceof Error ? err.message : String(err));
     } finally {
       setTesting(false);
     }
@@ -144,9 +149,11 @@ export function Providers({ active }: { active: boolean }): React.ReactElement {
   if (mode === "form") {
     return (
       <Box flexDirection="column">
-        <Text bold>New Provider</Text>
+        <Text bold color={colors.text}>
+          {icons.plug} New Provider
+        </Text>
         <Field label="Name (←/→)" active={fieldIndex === 0}>
-          <Text>{PROVIDER_NAMES[form.nameIdx]}</Text>
+          <Text color={colors.accent}>{PROVIDER_NAMES[form.nameIdx]}</Text>
         </Field>
         <Field label="API Key" active={fieldIndex === 1}>
           <TextInput
@@ -182,7 +189,7 @@ export function Providers({ active }: { active: boolean }): React.ReactElement {
           />
         </Field>
         <Box marginTop={1}>
-          <Text dimColor>Tab to move fields, Enter on last field to save, Esc to cancel</Text>
+          <Text dimColor>Tab move fields · ↵ on last field to save · Esc cancel</Text>
         </Box>
       </Box>
     );
@@ -190,21 +197,53 @@ export function Providers({ active }: { active: boolean }): React.ReactElement {
 
   return (
     <Box flexDirection="column">
-      <Text bold>Providers</Text>
-      <Box marginTop={1} flexDirection="column">
+      <Text bold color={colors.text}>
+        {icons.plug} Providers
+      </Text>
+      <Box marginTop={1} flexDirection="column" gap={1}>
         {providers.length === 0 && <Text dimColor>No providers configured yet. Press "n" to add one.</Text>}
-        {providers.map((p, i) => (
-          <Text key={p.id} color={active && i === selected ? "green" : undefined}>
-            {active && i === selected ? "> " : "  "}
-            {p.isActive ? "* " : "  "}
-            {p.name} ({p.model})
-          </Text>
-        ))}
+        {providers.map((p, i) => {
+          const isSel = active && i === selected;
+          return (
+            <Box
+              key={p.id}
+              flexDirection="column"
+              borderStyle="round"
+              borderColor={isSel ? colors.borderFocus : colors.border}
+              paddingX={1}
+            >
+              <Box justifyContent="space-between">
+                <Text bold={isSel} color={isSel ? colors.accent : colors.text}>
+                  {isSel ? icons.arrowRight : " "} {p.name}
+                </Text>
+                {p.isActive && (
+                  <Text color={colors.success} bold>
+                    {icons.check} ACTIVE
+                  </Text>
+                )}
+              </Box>
+              <Text color={colors.textDim}>
+                model: {p.model}
+                {p.embeddingModel ? ` · embed: ${p.embeddingModel}` : ""}
+              </Text>
+            </Box>
+          );
+        })}
       </Box>
-      {testing && <Text dimColor>Testing...</Text>}
-      {testResult && <Text>{testResult}</Text>}
+      {testing && (
+        <Box marginTop={1}>
+          <Text color={colors.warning}>{icons.spinner[0]} Testing connection...</Text>
+        </Box>
+      )}
+      {testResult && !testing && (
+        <Box marginTop={1}>
+          <Text color={testOk ? colors.success : colors.error}>
+            {testOk ? icons.check : icons.cross} {testResult}
+          </Text>
+        </Box>
+      )}
       <Box marginTop={1}>
-        <Text dimColor>n new, a activate, d delete, t test connection</Text>
+        <Text dimColor>n new · a activate · d delete · t test connection</Text>
       </Box>
     </Box>
   );
@@ -222,7 +261,7 @@ function Field({
   return (
     <Box>
       <Box width={20}>
-        <Text color={active ? "green" : undefined}>{label}:</Text>
+        <Text color={active ? colors.accent : colors.textDim}>{label}:</Text>
       </Box>
       {children}
     </Box>

@@ -6,6 +6,8 @@ interface TextAreaProps {
   onChange: (value: string) => void;
   active: boolean;
   height?: number;
+  /** When true, renders without its own border/padding -- for embedding inside a custom frame (e.g. EditorPane). */
+  bare?: boolean;
 }
 
 /**
@@ -13,7 +15,7 @@ interface TextAreaProps {
  * inserts a newline; Backspace deletes a character; Ctrl+S is left to the
  * parent screen to handle as "save" (not consumed here).
  */
-export function TextArea({ value, onChange, active, height = 15 }: TextAreaProps): React.ReactElement {
+export function TextArea({ value, onChange, active, height = 15, bare = false }: TextAreaProps): React.ReactElement {
   useInput(
     (input, key) => {
       if (!active) return;
@@ -36,6 +38,16 @@ export function TextArea({ value, onChange, active, height = 15 }: TextAreaProps
 
   const lines = value.split("\n");
   const visibleLines = lines.slice(-height);
+
+  if (bare) {
+    return (
+      <Box flexDirection="column" height={height}>
+        {visibleLines.map((line, i) => (
+          <Text key={i}>{line || " "}</Text>
+        ))}
+      </Box>
+    );
+  }
 
   return (
     <Box flexDirection="column" borderStyle="single" paddingX={1} height={height + 2}>

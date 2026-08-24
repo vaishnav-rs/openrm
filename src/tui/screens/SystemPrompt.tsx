@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { Box, Text, useInput } from "ink";
 import { getPrisma } from "../../db/prisma.js";
-import { TextArea } from "../TextArea.js";
+import { EditorPane } from "../EditorPane.js";
 
 const DEFAULT_PROMPT =
   "You are the WhatsApp assistant for this business. Use your tools to remember " +
@@ -14,6 +14,7 @@ const DEFAULT_PROMPT =
  */
 export function SystemPrompt({ active }: { active: boolean }): React.ReactElement {
   const [content, setContent] = useState("");
+  const [savedContent, setSavedContent] = useState("");
   const [status, setStatus] = useState<string | undefined>(undefined);
   const [loaded, setLoaded] = useState(false);
 
@@ -23,7 +24,9 @@ export function SystemPrompt({ active }: { active: boolean }): React.ReactElemen
       const prisma = getPrisma();
       const row = await prisma.agentConfig.findUnique({ where: { id: "1" } });
       if (!cancelled) {
-        setContent(row?.masterSystemPrompt ?? DEFAULT_PROMPT);
+        const initial = row?.masterSystemPrompt ?? DEFAULT_PROMPT;
+        setContent(initial);
+        setSavedContent(initial);
         setLoaded(true);
       }
     }
@@ -50,20 +53,24 @@ export function SystemPrompt({ active }: { active: boolean }): React.ReactElemen
       update: { masterSystemPrompt: content },
       create: { id: "1", masterSystemPrompt: content },
     });
-    setStatus(`Saved at ${new Date().toLocaleTimeString()}`);
+    setSavedContent(content);
+    setStatus(`saved at ${new Date().toLocaleTimeString()}`);
   }
 
   if (!loaded) return <Text dimColor>Loading...</Text>;
 
   return (
     <Box flexDirection="column">
-      <Text bold>Master System Prompt (database-backed)</Text>
-      <Box marginTop={1}>
-        <TextArea value={content} onChange={setContent} active={active} height={16} />
-      </Box>
-      <Box marginTop={1}>
-        <Text dimColor>Ctrl+S to save{status ? ` -- ${status}` : ""}</Text>
-      </Box>
+      <EditorPane
+        title="Master System Prompt"
+        subtitle="Database-backed -- combined with soul.md on every reply"
+        value={content}
+        onChange={setContent}
+        active={active}
+        height={16}
+        dirty={content !== savedContent}
+        status={status}
+      />
     </Box>
   );
 }
