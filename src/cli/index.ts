@@ -10,7 +10,7 @@ import { configExists, loadConfig } from "../config/config.js";
 import { getAuthDir, getConfigPath, getOpenrmHome, getSoulPath } from "../setup/paths.js";
 import { connect, reconnectFresh } from "../whatsapp/client.js";
 import { registerMessageHandlers } from "../whatsapp/handlers.js";
-import { disconnectPrisma } from "../db/prisma.js";
+import { disconnectPrisma, getPrisma } from "../db/prisma.js";
 
 function applyConfigToEnv(): void {
   if (!configExists()) return;
@@ -95,27 +95,97 @@ program
     await launchDashboard({ fresh: opts.fresh });
   });
 
+// Every model this app owns, in FK-safe order for a manual delete fallback
+// (TRUNCATE ... CASCADE below doesn't actually need this ordering, but it's
+// kept as documentation of the full table list wipeAllData() touches).
+const ALL_TABLES = [
+  "Chunk",
+  "Document",
+  "Message",
+  "Conversation",
+  "Interest",
+  "Contact",
+  "McpServer",
+  "ProviderConfig",
+  "AgentConfig",
+] as const;
+
+/**
+ * Permanently deletes every row this app has ever written to the connected
+ * database -- contacts, conversations, messages, RAG documents/chunks,
+ * provider/agent config, MCP servers. This is deliberately NOT part of the
+ * plain `reset` command: reset only ever touches ~/.openrm (local files),
+ * because the database is very often something the user provided
+ * themselves (an external/managed Postgres they already had), not
+ * something this tool spun up -- silently nuking every row in a database
+ * the user didn't necessarily expect to be touched at all is a much bigger
+ * blast radius than clearing local config/session files, so it needs its
+ * own explicit, separately-named opt-in rather than being folded into the
+ * default reset flow.
+ */
+async function wipeAllData(): Promise<void> {
+  const prisma = getPrisma();
+  const quoted = ALL_TABLES.map((t) => `"${t}"`).join(", ");
+  await prisma.$executeRawUnsafe(`TRUNCATE TABLE ${quoted} RESTART IDENTITY CASCADE`);
+}
+
 program
   .command("reset")
   .description("Remove all local openrm state (~/.openrm): config, WhatsApp auth, soul.md")
   .option("--yes", "skip confirmation")
-  .action(async (opts: { yes?: boolean }) => {
+  .option(
+    "--wipe-db",
+    "ALSO permanently delete every row in the connected database (contacts, conversations, " +
+      "messages, RAG documents, provider/agent config, everything) -- irreversible, requires --yes too"
+  )
+  .action(async (opts: { yes?: boolean; wipeDb?: boolean }) => {
     const home = getOpenrmHome();
-    if (!existsSync(home)) {
+    const homeExists = existsSync(home);
+
+    if (opts.wipeDb && !opts.yes) {
+      console.log("--wipe-db requires --yes as well (this is irreversible). Nothing was done.");
+      return;
+    }
+
+    if (!homeExists && !opts.wipeDb) {
       console.log("Nothing to reset -- ~/.openrm does not exist.");
       return;
     }
+
     if (!opts.yes) {
       console.log(
         `This will delete ${home} (config, WhatsApp auth/session, soul.md). ` +
           "Re-run with --yes to confirm. " +
           "Just need a new QR code? Use `openrm pair --fresh` instead -- it only " +
-          "clears the WhatsApp session, leaving config.json and soul.md intact."
+          "clears the WhatsApp session, leaving config.json and soul.md intact. " +
+          "To ALSO permanently wipe every row in the database, add --wipe-db --yes."
       );
       return;
     }
-    rmSync(home, { recursive: true, force: true });
-    console.log(`Removed ${home}.`);
+
+    if (opts.wipeDb) {
+      applyConfigToEnv();
+      const dbUrl = process.env.DATABASE_URL ?? "(not set)";
+      console.log(`Wiping ALL data in: ${dbUrl}`);
+      try {
+        await wipeAllData();
+        console.log("Database wiped: every contact, conversation, message, and document is gone.");
+      } catch (err) {
+        console.error(
+          `Failed to wipe the database: ${err instanceof Error ? err.message : String(err)}`
+        );
+        console.error("Local files were NOT removed -- fix DATABASE_URL/connectivity and retry.");
+        process.exitCode = 1;
+        return;
+      } finally {
+        await disconnectPrisma();
+      }
+    }
+
+    if (homeExists) {
+      rmSync(home, { recursive: true, force: true });
+      console.log(`Removed ${home}.`);
+    }
   });
 
 program
