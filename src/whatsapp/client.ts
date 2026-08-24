@@ -177,6 +177,23 @@ export async function connect(): Promise<WASocket> {
           status: "disconnected",
           detail: `Connection dropped, reconnecting... (${rawDetail}) See ${logPath} for the full trail.`,
         });
+        // connect()'s top-of-function guard is `if (connecting && sock) return
+        // sock` -- meant to stop concurrent duplicate connection attempts, but
+        // `connecting` is set true and never reset back to false anywhere in
+        // the normal flow (only reconnectFresh() resets it). So by the time
+        // ANY close event fires -- including this very common, expected one:
+        // statusCode 515/"restartRequired", which WhatsApp's servers send
+        // intentionally right after a successful first pairing to force a
+        // fresh socket -- both `connecting` and `sock` are still truthy from
+        // the original connection. That guard was silently turning every
+        // auto-reconnect into a no-op returning the already-dead socket: no
+        // new connect, no new auth read, nothing -- which is why pairing
+        // could scan successfully and then just hang forever on "Connection
+        // dropped, reconnecting..." with no actual reconnect ever happening.
+        // Clear both, mirroring exactly what reconnectFresh() already does
+        // correctly, so this call actually re-enters and reconnects.
+        sock = undefined;
+        connecting = false;
         void connect();
       }
     }
