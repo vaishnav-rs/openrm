@@ -8,6 +8,7 @@
   },
   "files": [
     "dist",
+    "web/dist",
     "templates",
     "prisma",
     "README.md"
@@ -16,7 +17,8 @@
     "node": ">=20.0.0"
   },
   "scripts": {
-    "build": "tsc",
+    "build": "tsc && npm run build:web",
+    "build:web": "cd web && npm run build",
     "postinstall": "prisma generate --schema=./prisma/schema.prisma || echo 'prisma generate skipped'"
   },
   "keywords": [

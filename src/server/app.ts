@@ -62,10 +62,22 @@ export function createApp(sessionSecret: string): Express {
   app.use("/api", createRagRouter());
   app.use("/api", createMcpRouter());
 
-  const placeholderHtml = loadPlaceholderHtml();
-  app.get("/", (_req, res) => {
-    res.type("html").send(placeholderHtml);
-  });
+  // Serve the web frontend SPA from web/dist (Phase 2)
+  const root = findPackageRoot();
+  const webDistPath = join(root, "web", "dist");
+  if (existsSync(webDistPath)) {
+    app.use(express.static(webDistPath));
+    // SPA fallback: any non-/api route serves index.html
+    app.get("*", (_req, res) => {
+      res.sendFile(join(webDistPath, "index.html"));
+    });
+  } else {
+    // Fallback to placeholder if web/dist doesn't exist yet
+    const placeholderHtml = loadPlaceholderHtml();
+    app.get("/", (_req, res) => {
+      res.type("html").send(placeholderHtml);
+    });
+  }
 
   return app;
 }
