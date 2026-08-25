@@ -4,13 +4,19 @@
 // prisma/migrations/0001_init/migration.sql, which runs
 // `CREATE EXTENSION IF NOT EXISTS vector;` before creating tables).
 //
-// Embedding dimension: Chunk.embedding is `vector(1536)`, matching
-// OpenAI's text-embedding-3-small / Ollama's nomic-embed-text-ish outputs.
-// If you use a provider/model with a different embedding dimension, adjust
-// the `vector(1536)` occurrences in this file AND in
-// prisma/migrations/0001_init/migration.sql to match, then re-run
-// `prisma migrate deploy` (or an appropriate new migration) before ingesting
-// any documents.
+// Embedding dimension: Chunk.embedding is an UNCONSTRAINED `vector` column
+// (no fixed dimension) -- see prisma/migrations/0005_flexible_embedding_dim
+// for why. It was originally hardcoded to vector(1536) (OpenAI's
+// text-embedding-3-small size), which broke ingestion for any other
+// embedding model with a different output size (e.g. Ollama's
+// nomic-embed-text, which is 768-dim, not 1536 -- the original comment here
+// was simply wrong about that). pgvector accepts any dimension into an
+// unconstrained `vector` column; the only real constraint is that
+// retrieve_knowledge's cosine-distance query (src/agent/tools/rag.ts)
+// compares the query embedding against stored chunk embeddings, which only
+// works when they're the same dimension -- i.e. don't switch embedding
+// models without re-ingesting existing documents, or comparisons against
+// old chunks embedded at a different dimension will error.
 //
 // Migration strategy: this package ships hand-authored SQL migrations
 // (prisma/migrations/**) rather than relying on `prisma migrate dev`
@@ -166,7 +172,7 @@ model Chunk {
   // raw SQL ($queryRaw/$executeRaw) in src/rag/ingest.ts and
   // src/agent/tools/rag.ts. `Unsupported(...)` lets `prisma generate`/
   // `validate` succeed without Prisma trying to manage the column.
-  embedding  Unsupported("vector(1536)")?
+  embedding  Unsupported("vector")?
   createdAt  DateTime                 @default(now())
 
   @@index([documentId])

@@ -1,0 +1,25 @@
+-- Relax Chunk.embedding from a fixed vector(1536) to an unconstrained
+-- vector column (no fixed dimension).
+--
+-- 0001_init hardcoded vector(1536), matching OpenAI's text-embedding-3-small
+-- size, on the (incorrect) assumption that Ollama's nomic-embed-text was
+-- "1536-ish" too -- it's actually 768-dim. Any embedding model with a
+-- non-1536 output dimension (nomic-embed-text, all-minilm, etc.) failed
+-- every ingest with a Postgres error like:
+--   "expected 1536 dimensions, not 768"
+--
+-- pgvector accepts any dimension into an unconstrained `vector` column; no
+-- ivfflat/hnsw index exists yet on this column (0001_init's index-creation
+-- line is commented out), so there's no fixed-dimension index to conflict
+-- with. If you build one later, it will need a fixed dimension matching
+-- whatever embedding model you've standardized on at that point.
+--
+-- Existing Chunk rows keep whatever dimension they were originally embedded
+-- at. Comparing across two different dimensions in the same
+-- retrieve_knowledge query still errors -- this migration only fixes
+-- ingestion, not the requirement that all chunks you actually search over
+-- share one embedding model's dimension. If you're changing embedding
+-- models, re-ingest your documents after switching.
+
+-- AlterTable
+ALTER TABLE "Chunk" ALTER COLUMN "embedding" TYPE vector;
