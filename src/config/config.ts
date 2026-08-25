@@ -27,6 +27,23 @@ export function loadConfig(): OpenrmConfig {
   return openrmConfigSchema.parse(JSON.parse(raw));
 }
 
+/**
+ * Reads ~/.openrm/config.json (if present) and assigns process.env.DATABASE_URL
+ * from it, UNLESS the env var is already set (env var wins, matching
+ * src/config/env.ts's documented override behavior). Shared by every entry
+ * point that needs a live Prisma connection before anything else runs --
+ * the foreground CLI (src/cli/index.ts) and the headless server worker
+ * (src/server/worker.ts) -- so this "how do we find the database" logic
+ * lives in exactly one place.
+ */
+export function applyConfigToEnv(): void {
+  if (!configExists()) return;
+  const config = loadConfig();
+  if (!process.env.DATABASE_URL) {
+    process.env.DATABASE_URL = config.databaseUrl;
+  }
+}
+
 export function saveConfig(config: OpenrmConfig): void {
   const home = getOpenrmHome();
   if (!existsSync(home)) {

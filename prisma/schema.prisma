@@ -141,6 +141,23 @@ model AgentConfig {
   // sending a WhatsApp notification. Configured from the "System Prompt"
   // TUI screen (src/tui/screens/SystemPrompt.tsx).
   escalationPhone    String?
+
+  // --- Web/API server auth (added for `openrm server`, see src/server/) ---
+  // Single-admin-password auth, hashed with Node's built-in crypto.scryptSync
+  // (no bcrypt dependency). Both are hex-encoded. Set once, interactively, the
+  // first time `openrm server start` runs with no password configured yet
+  // (see src/cli/index.ts's `ensureServerPassword`). Null until then, in
+  // which case the server refuses to start (never accepts an unauthenticated
+  // default password).
+  authPasswordHash String?
+  authPasswordSalt String?
+  // HMAC secret used to sign session cookies issued by POST /api/auth/login.
+  // Generated once (crypto.randomBytes) and persisted here so restarting the
+  // server does not invalidate every existing browser session. Sessions
+  // themselves are tracked in-memory only (a Map in the running worker
+  // process) -- this secret is only what lets the server verify a cookie
+  // presented by a client was really issued by it.
+  sessionSecret    String?
 }
 
 model McpServer {
