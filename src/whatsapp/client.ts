@@ -197,7 +197,19 @@ export async function connect(): Promise<WASocket> {
         // correctly, so this call actually re-enters and reconnects.
         sock = undefined;
         connecting = false;
-        void connect();
+        void (async () => {
+          const newSock = await connect();
+          // The NEW socket from connect() is a different object from the old,
+          // dead one. But the message handler was only registered once on the
+          // ORIGINAL socket at startup -- it never fires on the new socket
+          // because it's listening to the old socket's events. Re-register on
+          // every reconnect so incoming messages are received again. Without
+          // this, messages that arrive after a drop/reconnect are silently
+          // ignored forever (this was the bug: TUI open, message arrives,
+          // nothing shows up, user thinks the agent is broken).
+          const { registerMessageHandlers } = await import("./handlers.js");
+          registerMessageHandlers(newSock);
+        })();
       }
     }
   });
